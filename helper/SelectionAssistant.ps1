@@ -1117,7 +1117,7 @@ function Invoke-SelfTestTick {
 # Command prompts / status line helpers
 # ---------------------------------------------------------------------------
 
-function Get-Version { return '0.2.2' }
+function Get-Version { return '0.2.3' }
 
 # ---------------------------------------------------------------------------
 # Main pump

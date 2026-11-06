@@ -135,12 +135,21 @@ trace('platform + migration done')
 // (2) prompt + chunk logic
 {
   const settings = createDefaultSettings()
+  // Keep this gate deterministic across machines: the default target follows the
+  // host locale, so pin the two languages used by the prompt assertions below.
+  settings.language.target = 'zh'
+  settings.language.fallback = 'en'
   const translate = settings.actions.find(action => action.id === 'translate')
   const prompt = buildActionPrompt(translate, settings, 'Hello world')
   check(prompt.user.includes('Hello world'), 'prompt does not include the selection')
   check(prompt.user.includes('简体中文'), 'default translate prompt lost the target language')
   check(prompt.user.includes('English'), 'default translate prompt lost the fallback language')
   check(prompt.system.length > 0, 'default translate system prompt is empty')
+  // A detected source language picks the target directly and must not repeat the
+  // "if already in the target, translate into the fallback" branch.
+  const known = buildActionPrompt(translate, settings, '今天天气很好，我们出去走走。')
+  check(known.user.includes('English'), 'known-source translate prompt lost the resolved target')
+  check(!known.user.includes('如果它已经是English'), 'known-source translate prompt kept the redundant fallback branch')
   const custom = buildActionPrompt({ ...translate, prompt: '只回答：{{text}}' }, settings, 'X')
   check(custom.user === '只回答：X', `custom prompt rendered as ${custom.user}`)
   const appended = buildActionPrompt({ ...translate, prompt: '解释一下' }, settings, 'Y')

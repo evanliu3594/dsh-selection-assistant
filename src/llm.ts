@@ -8,6 +8,7 @@
  */
 import type { ActionSettings, ModelOption, ProviderOption, Settings } from './contract.js'
 import { SYSTEM_PROMPTS, SYSTEM_PROMPTS_EN, defaultPrompt } from './contract.js'
+import { LanguageOverlapError, languageLabel, resolveTranslationTarget } from './lang.js'
 
 /** One streamed chunk exposed to the SSE server. */
 export type RunChunk =
@@ -81,9 +82,33 @@ function replaceAll(haystack: string, needle: string, value: string): string {
 }
 
 /**
+ * Instruction appended to the default translate prompt when the local detector
+ * could not identify the source language and the configured target and fallback
+ * are the same language. The model then reports a language overlap instead of
+ * translating text that is already in the target language.
+ */
+function overlapHint(locale: 'zh' | 'en', targetLabel: string): string {
+  if (locale === 'en') {
+    return `If the text is already in ${targetLabel}, output only: 目标语言与源语言重叠`
+  }
+  return `如果原文已经是${targetLabel}，只输出：目标语言与源语言重叠`
+}
+
+/** Direct translation prompt used when the local detector resolved the target. */
+function directTranslatePrompt(locale: 'zh' | 'en', targetLabel: string): string {
+  if (locale === 'en') {
+    return `Translate the following text into ${targetLabel}. Preserve paragraphs and list structure. Output only the translation.\n\n{{text}}`
+  }
+  return `把下面的文本翻译成${targetLabel}。保留段落与列表结构。只输出译文。\n\n{{text}}`
+}
+
+/**
  * Build the system and user messages for one action.
+ * Translate actions first pick the target language from the selection so a
+ * selection already written in the only configured target fails locally instead
+ * of spending a model call.
  * @param action - configured action.
- * @param settings - current settings (language and fallback language).
+ * @param settings - current settings (language codes and UI locale).
  * @param text - the captured selection.
  * @returns Prompt pair ready for the llm service.
  */
@@ -96,13 +121,28 @@ export function buildActionPrompt(
   const preset = action.preset
   const systemDefaults = locale === 'en' ? SYSTEM_PROMPTS_EN : SYSTEM_PROMPTS
   const system = action.systemPrompt.trim() !== '' ? action.systemPrompt : systemDefaults[preset]
-  const template =
-    action.prompt.trim() !== ''
-      ? action.prompt
-      : defaultPrompt(preset, locale, settings.language.target, settings.language.fallback)
+  const configuredTarget = settings.language.target
+  const fallbackLabel = languageLabel(settings.language.fallback, locale)
+  let targetLabel = languageLabel(configuredTarget, locale)
+  let needsOverlapHint = false
+  let knownSource = false
+  if (preset === 'translate') {
+    const resolution = resolveTranslationTarget(text, configuredTarget, settings.language.fallback)
+    if (resolution.overlap) throw new LanguageOverlapError('目标语言与源语言重叠')
+    targetLabel = languageLabel(resolution.target, locale)
+    knownSource = resolution.source.language !== 'unknown'
+    needsOverlapHint = resolution.source.ambiguous && resolution.target === settings.language.fallback
+  }
+  const customPrompt = action.prompt.trim() !== ''
+  let template = customPrompt
+    ? action.prompt
+    : knownSource
+      ? directTranslatePrompt(locale, targetLabel)
+      : defaultPrompt(preset, locale, targetLabel, fallbackLabel)
+  if (!customPrompt && needsOverlapHint) template = `${template}\n\n${overlapHint(locale, targetLabel)}`
   let user = template
-  user = replaceAll(user, '{{target}}', settings.language.target)
-  user = replaceAll(user, '{{fallback}}', settings.language.fallback)
+  user = replaceAll(user, '{{target}}', targetLabel)
+  user = replaceAll(user, '{{fallback}}', fallbackLabel)
   user = replaceAll(user, '{{text}}', text)
   if (!template.includes('{{text}}')) user = `${template.trimEnd()}\n\n${text}`
   return { system, user }

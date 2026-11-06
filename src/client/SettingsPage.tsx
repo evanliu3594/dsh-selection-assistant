@@ -22,6 +22,7 @@ import { SaveStatus, type SavePhase, type Translate } from './ui.tsx'
 import { ActionsSection } from './sections/ActionsSection.tsx'
 import { AdvancedSection } from './sections/AdvancedSection.tsx'
 import { AppFilterSection } from './sections/AppFilterSection.tsx'
+import { LanguageSection } from './sections/LanguageSection.tsx'
 import { ModelSection, type ModelsPhase } from './sections/ModelSection.tsx'
 import { ResultSection } from './sections/ResultSection.tsx'
 import { StatusCard } from './sections/StatusCard.tsx'
@@ -279,6 +280,7 @@ export function SettingsPage({ t, api }: SettingsPageProps) {
         openPermissions={() => api.openPermissions()}
       />
       <TriggerSection t={t} settings={settings} update={update} os={state.platform.os} />
+      <LanguageSection t={t} settings={settings} update={update} />
       <AppFilterSection t={t} settings={settings} update={update} os={state.platform.os} />
       <ToolbarSection t={t} settings={settings} update={update} />
       <ResultSection t={t} settings={settings} update={update} />

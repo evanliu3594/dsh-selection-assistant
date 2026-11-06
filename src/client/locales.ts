@@ -64,6 +64,12 @@ export const zh = {
   'trigger.shortcutInvalid': '快捷键需包含 Ctrl、Alt 或 Shift，并加一个字母键。',
   'trigger.shortcutInvalidMac': '快捷键需包含 Control、Option、Command 或 Shift，并加一个字母键。',
 
+  'language.title': '翻译语言',
+  'language.desc': '决定翻译动作把文字译成哪种语言。',
+  'language.target': '目标语言',
+  'language.fallback': '备选语言',
+  'language.hint': '非目标语言的文字译成目标语言；已经是目标语言的文字译成备选语言。两者相同时，原文是目标语言会直接报错「目标语言与源语言重叠」。',
+
   'appFilter.title': '应用过滤',
   'appFilter.desc': '只让助手在指定应用中生效，或在指定应用中停用。',
   'appFilter.selector': '应用过滤模式选择',
@@ -270,6 +276,12 @@ export const en: Record<SelectionLocaleKey, string> = {
   'trigger.shortcutPlaceholderMac': 'For example Control+Option+Q or Command+Shift+A',
   'trigger.shortcutInvalid': 'The shortcut needs Ctrl, Alt or Shift plus one letter key.',
   'trigger.shortcutInvalidMac': 'The shortcut needs Control, Option, Command or Shift plus one letter key.',
+
+  'language.title': 'Translation languages',
+  'language.desc': 'Choose which language the translate action targets.',
+  'language.target': 'Target language',
+  'language.fallback': 'Fallback language',
+  'language.hint': 'Text in another language is translated into the target language; text already in the target language is translated into the fallback language. When both are the same, target-language text fails with "Target language overlaps the source language".',
 
   'appFilter.title': 'App filter',
   'appFilter.desc': 'Limit the assistant to certain apps, or block it in certain apps.',

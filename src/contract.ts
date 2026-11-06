@@ -7,6 +7,12 @@
  * keep both ends in sync when a field changes.
  */
 
+import { systemDefaultLanguage } from './lang.js'
+
+/** All supported translation target languages and their display names. */
+export { LANGUAGES, languageLabel } from './lang.js'
+export type { DetectedLanguage, LanguageInfo, TranslationTarget } from './lang.js'
+
 /** The user-facing trigger mode. `ctrl` matches the requested behavior: select, then hold Ctrl. */
 export type TriggerMode = 'selection' | 'ctrl' | 'shortcut'
 
@@ -80,7 +86,9 @@ export interface Settings {
   }
   language: {
     ui: 'zh' | 'en'
+    /** Translation target language code from {@link LANGUAGES} (for example `zh`). */
     target: string
+    /** Fallback language code, used when the selection is already in `target`. */
     fallback: string
   }
   appFilter: {
@@ -143,7 +151,10 @@ export const SYSTEM_PROMPTS_EN: Record<ActionPreset, string> = {
   custom: '',
 }
 
-/** Default prompt templates per preset. `{{text}}` is the captured selection. */
+/**
+ * Default prompt templates per preset. `{{text}}` is the captured selection;
+ * `target` and `fallback` are display names, not language codes.
+ */
 export function defaultPrompt(preset: ActionPreset, language: 'zh' | 'en', target: string, fallback: string): string {
   if (language === 'en') {
     switch (preset) {
@@ -199,7 +210,7 @@ export function createDefaultSettings(): Settings {
       height: 400,
     },
     model: { provider: '', model: '', reasoningEffort: '', temperature: null },
-    language: { ui: zh, target: '简体中文', fallback: 'English' },
+    language: { ui: zh, target: systemDefaultLanguage(), fallback: 'en' },
     appFilter: { mode: 'off', processes: [] },
     actions: [
       {

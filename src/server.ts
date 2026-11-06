@@ -394,6 +394,9 @@ export class ActionServer {
         res.end()
       }
     } catch (error) {
+      // LlmError and LanguageOverlapError carry a machine code; the helper turns
+      // this SSE error frame into the result-window message. A language overlap
+      // is thrown by the prompt builder before any model call is started.
       const code = (error as { code?: unknown }).code
       const message = error instanceof Error ? error.message : '模型调用失败。'
       this.deps.logger.error(`action ${actionId} failed: ${message}`)

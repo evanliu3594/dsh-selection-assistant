@@ -22,6 +22,7 @@ import {
   type SettingsPatch,
   type TriggerMode,
 } from './contract.js'
+import { normalizeLanguageCode } from './lang.js'
 
 /** Settings document version this module understands. */
 const SETTINGS_VERSION = 1
@@ -181,8 +182,10 @@ export function sanitizeSettings(raw: unknown): Settings {
     },
     language: {
       ui: oneOf(language.ui, ['zh', 'en'], defaults.language.ui),
-      target: text(language.target, defaults.language.target, 60),
-      fallback: text(language.fallback, defaults.language.fallback, 60),
+      // 0.2.3 stores language codes; pre-0.2.3 documents held display names
+      // ("简体中文", "English"), so migrate them and fall back to the defaults.
+      target: normalizeLanguageCode(language.target, defaults.language.target),
+      fallback: normalizeLanguageCode(language.fallback, defaults.language.fallback),
     },
     appFilter: {
       mode: oneOf<AppFilterMode>(appFilter.mode, ['off', 'blacklist', 'whitelist'], defaults.appFilter.mode),
