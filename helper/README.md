@@ -41,7 +41,9 @@ pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <helper>\Selection
 ## 结果窗
 
 - 默认 500×400（配置值，夹紧到 300..900 × 200..900），右下角拖动改变尺寸，`rememberSize` 时写回 `helper-state.json`。
-- 跟随工具栏显示在其下方，空间不足翻到上方；`followToolbar=false` 时在工作区居中。与工具栏间距 6px。
+- 首次显示跟随工具栏下方，空间不足翻到上方；`followToolbar=false` 时在工作区居中。与工具栏间距 6px。
+- 几何固化：用户拖动标题栏或右下角后，位置写 `resultX/resultY`，尺寸写 `resultWidth/resultHeight`。下一次结果窗在未 pin 时原位同尺寸替换；当前窗已 pin 时旧窗保留，新窗同尺寸并向左下偏移 24px。多个 pin 窗可同时存在，各自独立流式与关闭。
+- 详细口径见 [references/result-window-geometry.md](../references/result-window-geometry.md)。
 - 流式期间显示进度条与“正在生成”；收到 delta 后按轻量 Markdown 渲染（`**粗体**`、行内代码、``` 代码块、`- ` 列表），其余按纯文本。
 - 窗口可获取焦点：`Esc` 关闭、`R` 重新生成、`C` 复制（无修饰键时生效）。失焦且 `autoClose` 打开时关闭并取消 SSE 请求；点击窗口外也会关闭。
 - 标题栏 pin 按钮切换钉住：钉住时窗口置顶，点击窗口外不关闭；取消钉住后恢复 `result.alwaysOnTop` 与 `result.autoClose`。每个结果窗初始未钉住。
@@ -49,7 +51,7 @@ pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <helper>\Selection
 
 ## helper-state.json
 
-helper 自己写，字段：`version`、`pid`、`startedAt`、`resultWidth`、`resultHeight`、`lastActionId`、`toolbarX`、`toolbarY`。写入用 UTF-8 无 BOM，先读旧值再合并。
+helper 自己写，字段：`version`、`pid`、`startedAt`、`resultX`、`resultY`、`resultWidth`、`resultHeight`、`lastActionId`、`toolbarX`、`toolbarY`。写入用 UTF-8 无 BOM，先读旧值再合并。`resultX/Y` 是窗口原点（物理屏幕坐标），`resultWidth/Height` 是内容尺寸。
 
 ## 自测
 
@@ -63,7 +65,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File helper\selftest.ps1 -KeepTemp     
 
 1. 钩子层：安装真实全局钩子，用 SendInput 注入 Ctrl 按下 → 700ms → 松开，断言钩子收到 ctrl-down/ctrl-up 且时长 ≥ `longPressMs`；再用钩子引擎自注入事件验证事件队列、longpress 判定与鼠标拖拽语义。
 2. mock 宿主：用 `TcpListener` 手写 HTTP/1.1 + SSE（本机非管理员、低完整性进程无法启动 `HttpListener`），校验 Bearer token，记录 `/v1/status` 与 `/v1/log`，`/v1/action` 依次发两条 meta、10 条 delta、一条 done。
-3. UI 自测：启动 `SelectionAssistant.ps1 -SelfTest`，展示工具栏并截图 `preview\toolbar.png`；随后对工具栏「翻译」按钮触发真实 WPF 路由事件（`RaiseEvent`），断言结果窗已打开（`clicked=true`）；再对结果窗 pin 按钮触发两次点击，断言钉住/取消钉住与 Topmost（`pinToggled=true`）。等待完整流后截图 `preview\result.png`。断言退出码 0、`selftest-result.json`、截图尺寸、`helper.log` 无 ERROR。截图只写到本地 `preview\` 目录，不随仓库提交。
+3. UI 自测：启动 `SelectionAssistant.ps1 -SelfTest`，展示工具栏并截图 `preview\toolbar.png`；随后对工具栏「翻译」按钮触发真实 WPF 路由事件（`RaiseEvent`），断言结果窗已打开（`clicked=true`）；再对结果窗 pin 按钮触发两次点击，断言钉住/取消钉住与 Topmost（`pinToggled=true`）。等待完整流后截图 `preview\result.png`。随后再次 pin 首个窗口并触发第二次翻译，断言旧窗仍可见、新窗内容尺寸相同、原点偏移 `(-24, +24)`（`stackOk=true`）；等待第二个流完成后清理。断言退出码 0、`selftest-result.json`、截图尺寸、`helper.log` 无 ERROR。截图只写到本地 `preview\` 目录，不随仓库提交。`selftest-result.json` 新增 `stackOk/stackOffsetX/stackOffsetY/stackSameSize/oldVisible/stackFirstRect/stackSecondRect`。
 4. 生命周期：普通模式启动 helper，等 `/v1/status` ready，写入 `command.json` 验证 preview 命令，然后关闭 stdin，断言 8 秒内退出且退出码 0。
 
 通过时最后一行是 `SELFTEST: PASS`，退出码 0。

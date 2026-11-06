@@ -19,7 +19,8 @@
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 /** Root of the package (script runs from there). */
@@ -100,9 +101,10 @@ if (failures.length > 0) {
 }
 
 // (2) isolated data directory ----------------------------------------------
-const dataDir = join(ROOT, `.verify-macos-helper-${String(process.pid)}`)
-rmSync(dataDir, { recursive: true, force: true })
-mkdirSync(dataDir, { recursive: true })
+// Keep verification data outside the repository. On macOS, an app launched by
+// LaunchServices may need an extra TCC grant to read files under Desktop; the
+// production data directory is ~/.dsh, so /tmp is the representative location.
+const dataDir = mkdtempSync(join(tmpdir(), 'dsh-selection-assistant-verify-'))
 const previewDir = join(dataDir, 'preview')
 const selftestDir = join(dataDir, 'selftest')
 mkdirSync(previewDir, { recursive: true })
@@ -243,6 +245,8 @@ if (existsSync(selftestFile)) {
     check(result.clicked === true, `selftest clicked is ${String(result.clicked)}`)
     check(result.pinToggled === true, `selftest pinToggled is ${String(result.pinToggled)}`)
     check(result.resizeOk === true, `selftest resizeOk is ${String(result.resizeOk)}`)
+    check(result.stackOk === true, `selftest stackOk is ${String(result.stackOk)}`)
+    check(result.sessionCount === 2, `selftest sessionCount is ${String(result.sessionCount)}`)
     check(result.done === true, `selftest done is ${String(result.done)}`)
     const toolbarSize = pngSize(join(selftestDir, 'toolbar.png'))
     const resultSize = pngSize(join(selftestDir, 'result.png'))

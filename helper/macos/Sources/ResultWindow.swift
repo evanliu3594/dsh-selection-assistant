@@ -2,6 +2,7 @@ import Cocoa
 
 final class ResultTitleBarView: NSView {
     var borderColor: NSColor = .clear
+    var onDragEnd: ((NSPoint) -> Void)?
     private var startMouse: NSPoint = .zero
     private var startOrigin: NSPoint = .zero
     private var dragging = false
@@ -29,7 +30,9 @@ final class ResultTitleBarView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard dragging, let window else { return }
         dragging = false
+        onDragEnd?(window.frame.origin)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -57,6 +60,8 @@ final class ResultWindow: NSObject, NSWindowDelegate {
     var onCopy: (() -> Void)?
     var onRegenerate: (() -> Void)?
     var onResizeEnd: ((NSSize) -> Void)?
+    var onMoved: ((NSPoint) -> Void)?
+    var onActivate: (() -> Void)?
 
     private let card: CardView
     private let titleBar: ResultTitleBarView
@@ -198,6 +203,7 @@ final class ResultWindow: NSObject, NSWindowDelegate {
         panel.alphaValue = CGFloat(config.result.opacity)
         panel.isMovableByWindowBackground = false
 
+        titleBar.onDragEnd = { [weak self] origin in self?.onMoved?(origin) }
         titleBar.addSubview(titleLabel)
         titleBar.addSubview(modelLabel)
         titleBar.addSubview(pinButton)
@@ -342,11 +348,17 @@ final class ResultWindow: NSObject, NSWindowDelegate {
 
     // MARK: Show / close
 
-    func show(relativeToToolbar toolbarFrame: NSRect?, cursorPoint: CGPoint?) {
+    func show(relativeToToolbar toolbarFrame: NSRect?, cursorPoint: CGPoint?, preferredOrigin: NSPoint? = nil) {
         installKeyMonitor()
         let size = panel.frame.size
         var origin: NSPoint
-        if config.followToolbar, let toolbarFrame {
+        if let preferredOrigin {
+            let screen = ScreenGeometry.screen(containing: preferredOrigin)
+            origin = ScreenGeometry.clamp(
+                rect: NSRect(origin: preferredOrigin, size: size),
+                into: screen.visibleFrame
+            ).origin
+        } else if config.followToolbar, let toolbarFrame {
             let work = ScreenGeometry.workArea(containing: NSPoint(x: toolbarFrame.midX, y: toolbarFrame.midY))
             var x = toolbarFrame.minX
             var y = toolbarFrame.minY - 6 - size.height
@@ -478,13 +490,17 @@ final class ResultWindow: NSObject, NSWindowDelegate {
 
     // MARK: Pin
 
+    func setPinned(_ pinned: Bool) {
+        isPinned = pinned
+        panel.level = pinned ? .statusBar : (defaultTopmost ? .floating : .normal)
+        let color = pinned ? palette.accent : palette.muted
+        pinButton.tooltip = pinned ? strings.unpin : strings.pinOnTop
+        applyTint(pinIconView, color)
+    }
+
     @discardableResult
     func performPinClick() -> Bool {
-        isPinned.toggle()
-        panel.level = isPinned ? .statusBar : (defaultTopmost ? .floating : .normal)
-        let color = isPinned ? palette.accent : palette.muted
-        pinButton.tooltip = isPinned ? strings.unpin : strings.pinOnTop
-        applyTint(pinIconView, color)
+        setPinned(!isPinned)
         return isPinned
     }
 
@@ -539,11 +555,17 @@ final class ResultWindow: NSObject, NSWindowDelegate {
         if isDone { scrollToBottom() }
     }
 
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard !closing else { return }
+        onActivate?()
+    }
+
     func windowDidResignKey(_ notification: Notification) {
         guard !closing else { return }
         guard !suppressAutoClose else { return }
         guard !isPinned else { return }
         guard config.autoClose else { return }
+        Logger.shared.debug("结果窗失焦自动关闭 action=\(actionId)")
         onClose?()
     }
 }

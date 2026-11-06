@@ -14,7 +14,8 @@
  *   node scripts/verify-host-macos.mjs [--keep]
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -76,9 +77,9 @@ if (failures.length > 0) {
 const mod = await import(pathToFileURL(join(ROOT, 'lib', 'index.js')).href)
 const { SettingsStore, ActionServer, HelperManager, PluginLogger } = mod
 
-const dataDir = join(ROOT, `.verify-host-macos-${String(process.pid)}`)
-rmSync(dataDir, { recursive: true, force: true })
-mkdirSync(dataDir, { recursive: true })
+// Use the system temporary directory: the app launched by LaunchServices must
+// be able to read its config without an extra Desktop-folder TCC prompt.
+const dataDir = mkdtempSync(join(tmpdir(), 'dsh-selection-assistant-host-verify-'))
 const settings = new SettingsStore(dataDir)
 const logger = new PluginLogger(dataDir, 'debug')
 
@@ -103,7 +104,7 @@ try {
     dataDir,
     logPath: join(dataDir, 'helper.log'),
     pluginLogPath: logger.path,
-    version: '0.2.0-test',
+    version: '0.2.1-test',
     settings,
     llm,
     helper: undefined,

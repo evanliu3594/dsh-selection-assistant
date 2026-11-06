@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.1 (2026-11-06)
+
+结果窗几何固化与多窗口堆叠。
+
+### 新增
+
+- 所有模型结果窗（翻译、解释、总结、润色）共享一套位置与尺寸记忆：用户手动拖动或缩放后写入 `helper-state.json`，后续结果窗沿用。
+- 当前结果窗未 pin 时，下一次结果窗在原位、同尺寸出现；当前结果窗 pin 时保留旧窗，新窗同尺寸并向左下偏移 24 像素/点，可继续堆叠多个 pin 窗口。
+- 每个结果窗独立流式输出、关闭、复制、重新生成、pin 与失焦行为。
+- 设置页「功能窗口」增加行为说明。
+
+### 变更
+
+- `helper-state.json` 增加 `resultX`/`resultY`（窗口原点）；尺寸继续使用 `resultWidth`/`resultHeight`。
+- `rememberSize` 继续控制尺寸记忆；位置记忆独立生效。
+
+### 验证
+
+- macOS 构建 PASS（646944 字节，arm64 13.1）；自测 PASS，`ok/clicked/pinToggled/resizeOk/stackOk/done` 全 true，`sessionCount=2`。
+- macOS 助手端到端 `verify-macos-helper` PASS（LaunchServices、status/log、preview SSE、截图、健康退出）。
+- macOS 宿主管线 `verify-host-macos` PASS（真实 HelperManager 构建启动、预览动作、SIGTERM 回收）。
+- 通用门 `probe`、`verify-host`、`verify-client-bundle` PASS。
+- Windows：三个 PowerShell 文件语法解析 PASS；纯函数级几何测试覆盖默认、pin 偏移 `(-24,+24)`、未 pin 原位、保存几何与结果列表移除，全部 PASS。本机无 Windows/WPF 运行环境，Windows 自测与 WPF 交互仍需实机验收。
+
 ## 0.2.0 (2026-11-06)
 
 新增 macOS 支持。Windows 行为与 0.1.0 保持一致。

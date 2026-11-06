@@ -83,24 +83,32 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 
 ## 6. 当前状态
 
-0.2.0 双平台开发分支为 `feat/macos-support`，尚未合并到 `main`，尚未安装进 desktop profile。Windows 0.1.0 的行为与验证基线保留；macOS 新增 Swift 助手。
+0.2.1 双平台开发分支为 `feat/macos-support`，尚未合并到 `main`，尚未安装进 desktop profile。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
 
 macOS 验证结果（2026-11-06，macOS 27.2 arm64、Swift 6.4.2）：
 
-- 构建：`sh scripts/build-macos-helper.sh` PASS（arm64 13.1，624016 字节）；`--universal` PASS（arm64 + x86_64，1231712 字节）。
-- 助手自测：PASS；`ok/clicked/pinToggled/resizeOk/done` 全 true；工具栏与结果窗离屏截图正常。
-- 助手端到端：`node scripts/verify-macos-helper.mjs` PASS（LaunchServices 启动、权限 error 帧、预览 SSE、截图、健康退出）。
-- 宿主管线：`node scripts/verify-host-macos.mjs` PASS（真实 HelperManager 自动构建、UserDefaults 配置、预览动作、SIGTERM 回收）。
-- 通用门：`probe`、`verify-host`、`verify-client-bundle` PASS；`verify-host` 覆盖 helperPath 迁移、平台分派、权限帧与 8 条设置路由。
-- 权限归属：`open` 启动的 app 的 responsible pid 是自己、AX trust=false；直接 spawn 内层二进制时 responsible 是 DSH、trust=true。方案有效。
-- 视觉抽查：浅色工具栏（普通/紧凑+溢出）、结果窗、Markdown、底栏、pin、缩放柄与 Windows 版一致；深色主题未截图验收。
-- 待人工验收：辅助功能授权后的真实拖选/长按 Control/⌘C、应用过滤、pin 与失焦关闭、深色主题、多屏/混合 DPI、Intel 实机、设置页真实视觉、真实 DeepSeek 端到端。
+- 构建：`sh scripts/build-macos-helper.sh` PASS（arm64 13.1，646944 字节）。
+- 助手自测：PASS；`ok/clicked/pinToggled/resizeOk/stackOk/done` 全 true，`sessionCount=2`。
+- 助手端到端：`node scripts/verify-macos-helper.mjs` PASS（LaunchServices、权限 error 帧、预览 SSE、截图、健康退出）。
+- 宿主管线：`node scripts/verify-host-macos.mjs` PASS（真实 HelperManager 构建启动、UserDefaults、预览动作、SIGTERM 回收）。
+- 通用门：`probe`、`verify-host`、`verify-client-bundle` PASS。
+- 权限归属与 0.2.0 相同：`open` 启动 app 的 responsible pid 是自己、AX trust=false。
+- 自动化验证数据目录在系统临时目录；LaunchServices app 读取 Desktop 下配置会触发“桌面文件夹”TCC，生产 `~/.dsh` 不受影响。
+
+Windows 0.2.1：
+
+- 结果窗列表、每窗 Stream、pin 叠窗与未 pin 原位、`resultX/resultY` 已实现。
+- 三个 PowerShell 文件语法解析 PASS；纯函数几何测试覆盖默认、pin 偏移、未 pin 原位、保存几何、列表移除，全部 PASS。
+- 本机无 Windows/WPF，Windows 自测与真实拖动/缩放、pin 叠窗、多屏混合 DPI 待实机验收。
+
+待人工验收：Windows 实机自测、macOS 辅助功能授权后的真实拖选/长按 Control/⌘C、两端 pin 叠窗与几何恢复、深色主题、多屏/混合 DPI、真实 DeepSeek 端到端。
 
 注意：macOS 辅助功能授权无法由 agent 代授予。重新编译 app 会改变 ad-hoc 签名，授权可能需要重新勾选。宿主 `src/` 改动后必须完整重启 DSH；macOS 助手源码改动后宿主下次启动会重新编译 app；浏览器半体更新后重建 `lib/` 并刷新设置页。
 
 ## 7. 参考
 
 - 接口契约：`references/contracts.md`
+- 结果窗几何规则：`references/result-window-geometry.md`
 - Windows 助手：`helper/README.md`
 - macOS 助手：`helper/macos/README.md`
 - Cherry Studio 对照研究：`references/cherry-studio-selection-assistant.md`

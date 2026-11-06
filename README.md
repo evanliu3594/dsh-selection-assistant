@@ -65,6 +65,7 @@ macOS 需要「辅助功能」权限才能监听全局事件并发送 ⌘C。第
 3. 点动作按钮：翻译 / 解释 / 总结 / 搜索 / 复制（润色需在设置里启用）。
 4. 结果窗出现在工具栏下方；Esc 关闭，R 重新生成，C 复制。
 5. 点结果窗标题栏的 pin 按钮可钉住窗口：钉住后窗口保持最前，点击其他应用不关闭；再点一次取消钉住，恢复设置里的置顶与失焦关闭行为。
+6. 手动拖动或缩放结果窗后，几何会固定。下一次划词时，未 pin 的旧窗会被原位同尺寸替换；旧窗已 pin 时旧窗保留，新窗同尺寸并向左下偏移 24 像素（macOS 为 24 点），可继续堆叠。
 
 触发方式可以改成「选中即出现」或「快捷键」，见设置页。
 
@@ -75,7 +76,7 @@ macOS 需要「辅助功能」权限才能监听全局事件并发送 ⌘C。第
 | 状态 | 启用开关、助手进程状态、macOS 辅助功能权限、重启 |
 | 触发方式 | 选中文字 / 长按触发键 / 快捷键；长按时长；快捷键 |
 | 工具栏 | 紧凑模式（只显示图标）、最多直显动作数、缩放 |
-| 功能窗口 | 跟随工具栏、记住大小、失焦自动关闭、置顶、透明度 |
+| 功能窗口 | 跟随工具栏、记住大小、失焦自动关闭、置顶、透明度；手动调整后固定位置/尺寸 |
 | 功能 | 动作启用与排序、编辑提示词、自定义动作、每动作模型覆盖、搜索引擎 |
 | 模型 | 服务、模型、推理强度、温度（留空跟随 DSH 默认） |
 | 高级 | 助手路径（Windows 为 pwsh）、日志级别、预览工具栏、查看日志 |
@@ -89,7 +90,7 @@ Windows: %USERPROFILE%\.dsh\selection-assistant\
 macOS:   ~/.dsh/selection-assistant/
   settings.json        设置（唯一真源）
   helper-config.json   每次启动助手时写入的运行配置
-  helper-state.json    助手记住的结果窗尺寸、工具栏位置等
+  helper-state.json    助手记住的结果窗位置/尺寸、工具栏位置等
   command.json         设置页「预览工具栏」的一次性命令
   helper.log           助手日志
   plugin.log           宿主插件日志
@@ -175,7 +176,7 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 
 macOS 需要辅助功能授权才能验证真实拖选取词；自动验证覆盖编译、窗口渲染、SSE、LaunchServices 启动与健康退出，真实取词与 ⌘C 需人工验收。
 
-接口契约见 [references/contracts.md](references/contracts.md)，验证记录见 [references/verification.md](references/verification.md)，Cherry Studio 对照研究见 [references/cherry-studio-selection-assistant.md](references/cherry-studio-selection-assistant.md)。
+接口契约见 [references/contracts.md](references/contracts.md)，结果窗几何规则见 [references/result-window-geometry.md](references/result-window-geometry.md)，验证记录见 [references/verification.md](references/verification.md)，Cherry Studio 对照研究见 [references/cherry-studio-selection-assistant.md](references/cherry-studio-selection-assistant.md)。
 
 ## 许可
 

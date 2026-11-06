@@ -30,6 +30,17 @@ final class StateStore {
         return (width, height)
     }
 
+    var rememberedResultOrigin: (x: Double, y: Double)? {
+        guard let x = number("resultX"), let y = number("resultY") else { return nil }
+        return (x, y)
+    }
+
+    func setResultOrigin(x: Double, y: Double) {
+        values["resultX"] = (x * 10).rounded() / 10
+        values["resultY"] = (y * 10).rounded() / 10
+        save()
+    }
+
     func setResultSize(width: Double, height: Double) {
         values["resultWidth"] = (width * 10).rounded() / 10
         values["resultHeight"] = (height * 10).rounded() / 10

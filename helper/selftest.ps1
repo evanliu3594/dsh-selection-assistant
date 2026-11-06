@@ -451,11 +451,16 @@ function Invoke-UiSelfTest {
     if (Test-Path -LiteralPath $resultPath) {
         try {
             $result = [System.IO.File]::ReadAllText($resultPath) | ConvertFrom-Json
-            Write-Info ('selftest-result: ok=' + $result.ok + ' metas=' + $result.metaCount + ' deltas=' + $result.deltaCount + ' done=' + $result.done + ' pinToggled=' + $result.pinToggled + ' error=' + $result.error)
+            Write-Info ('selftest-result: ok=' + $result.ok + ' metas=' + $result.metaCount + ' deltas=' + $result.deltaCount + ' done=' + $result.done + ' pinToggled=' + $result.pinToggled + ' stackOk=' + $result.stackOk + ' oldVisible=' + $result.oldVisible + ' sameSize=' + $result.stackSameSize + ' offset=' + $result.stackOffsetX + ',' + $result.stackOffsetY + ' error=' + $result.error)
             if ($result.ok) { Write-Pass 'helper 自测结果 ok=true' } else { Write-Fail 'helper 自测结果 ok=false' }
             if ($result.clicked) { Write-Pass 'helper 自测经工具栏按钮点击触发动作' } else { Write-Fail 'helper 自测未经工具栏按钮点击触发动作' }
             if ($result.done) { Write-Pass 'helper 收到 SSE done 事件' } else { Write-Fail 'helper 未收到 SSE done 事件' }
             if ($result.pinToggled) { Write-Pass 'helper 自测经 pin 按钮切换置顶' } else { Write-Fail 'helper 自测未经 pin 按钮切换置顶' }
+            if ($result.stackOk) {
+                Write-Pass ('helper 多窗口断言：旧窗保留、新窗同尺寸、原点偏移 ' + $result.stackOffsetX + ',' + $result.stackOffsetY)
+            } else {
+                Write-Fail ('helper 多窗口断言失败: oldVisible=' + $result.oldVisible + ' sameSize=' + $result.stackSameSize + ' dx=' + $result.stackOffsetX + ' dy=' + $result.stackOffsetY)
+            }
             if ([int]$result.metaCount -ge 2) { Write-Pass ('helper 收到 ' + $result.metaCount + ' 条 meta 事件（含两条 meta）') } else { Write-Fail ('meta 事件数 ' + $result.metaCount + ' < 2') }
             if ([int]$result.deltaCount -ge 10) { Write-Pass ('helper 收到 ' + $result.deltaCount + ' 条 delta 事件') } else { Write-Fail ('delta 事件数 ' + $result.deltaCount + ' < 10') }
         } catch {

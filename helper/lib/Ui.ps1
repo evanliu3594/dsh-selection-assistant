@@ -6,18 +6,20 @@ $script:UiFont = 'Segoe UI, Microsoft YaHei UI, Microsoft YaHei'
 $script:IconFont = 'Segoe MDL2 Assets'
 $script:UiBrushCache = @{}
 $script:UiHooks = @{
-    OnAction         = $null   # param($actionId)
-    OnCloseToolbar   = $null   # param()
-    OnCopyResult     = $null   # param()
-    OnRegenerate     = $null   # param()
-    OnCloseResult    = $null   # param()
-    OnSaveResultSize = $null   # param($width,$height)
-    OnToolbarMoved   = $null   # param($x,$y) physical
+    OnAction            = $null   # param($actionId)
+    OnCloseToolbar      = $null   # param()
+    OnCopyResult        = $null   # param($ctx)
+    OnRegenerate        = $null   # param($ctx)
+    OnCloseResult       = $null   # param($ctx)
+    OnSaveResultSize    = $null   # param($width,$height) physical frame size
+    OnSaveResultPosition = $null  # param($x,$y) physical window origin
+    OnToolbarMoved      = $null   # param($x,$y) physical
 }
 $script:UI = @{
     Theme       = 'light'
     Toolbar     = $null
     Result      = $null
+    Results     = [System.Collections.Generic.List[object]]::new()
     Toast       = $null
     LoadAnim    = 0
 }
@@ -534,9 +536,208 @@ function Close-UiToast {
 # Result window
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Result window list / context helpers
+#
+# $script:UI.Results holds every open result window context. A context is a
+# hashtable that owns its window widgets plus Stream, Pinned, SourceText, App
+# and Drag state. $script:UI.Result points at the current window.
+# WPF handlers run on the dispatcher after the creating function has returned,
+# so a handler resolves its own window from $sender and only touches $script:
+# state, script functions, $sender and $e. PowerShell script blocks do not
+# close over function locals.
+# ---------------------------------------------------------------------------
+
+function Get-ResultWindowFromSender {
+    param($Sender)
+    if ($null -eq $Sender) { return $null }
+    if ($Sender -is [System.Windows.Window]) { return $Sender }
+    try { return [System.Windows.Window]::GetWindow($Sender) } catch { return $null }
+}
+
+function Find-ResultContextByWindow {
+    param($Window)
+    if ($null -eq $Window) { return $null }
+    if (-not $script:UI -or $null -eq $script:UI.Results) { return $null }
+    foreach ($ctx in @($script:UI.Results)) {
+        if ($null -eq $ctx) { continue }
+        if ($ctx.Window -and [object]::ReferenceEquals($ctx.Window, $Window)) { return $ctx }
+    }
+    return $null
+}
+
+function Get-ResultContextFromSender {
+    param($Sender)
+    $win = Get-ResultWindowFromSender $Sender
+    if ($null -eq $win) { return $null }
+    return Find-ResultContextByWindow $win
+}
+
+function Test-ResultContextVisible {
+    param($Context)
+    if ($null -eq $Context -or $null -eq $Context.Window) { return $false }
+    try { return [bool]$Context.Window.IsVisible } catch { return $false }
+}
+
+function Get-LastVisibleResultContext {
+    param([switch]$PinnedOnly)
+    if (-not $script:UI -or $null -eq $script:UI.Results) { return $null }
+    $found = $null
+    foreach ($ctx in @($script:UI.Results)) {
+        if (-not (Test-ResultContextVisible $ctx)) { continue }
+        if ($PinnedOnly -and -not $ctx.Pinned) { continue }
+        $found = $ctx
+    }
+    return $found
+}
+
+function Get-ResultFallbackContext {
+    $fallback = Get-LastVisibleResultContext -PinnedOnly
+    if (-not $fallback) { $fallback = Get-LastVisibleResultContext }
+    return $fallback
+}
+
+function Get-FocusedResultContext {
+    $handle = [IntPtr]::Zero
+    try { $handle = [ForegroundInfo]::GetForegroundWindow() } catch { }
+    if ($handle -eq [IntPtr]::Zero) { return $null }
+    foreach ($ctx in @($script:UI.Results)) {
+        if ($null -eq $ctx) { continue }
+        if ($ctx.Hwnd -and $ctx.Hwnd -eq $handle) { return $ctx }
+    }
+    return $null
+}
+
+function Add-ResultContext {
+    param($Context)
+    if ($null -eq $Context) { return }
+    if ($null -eq $script:UI.Results) { $script:UI.Results = [System.Collections.Generic.List[object]]::new() }
+    $script:UI.Results.Add($Context) | Out-Null
+    $script:UI.Result = $Context
+}
+
+function Remove-ResultContext {
+    param($Context)
+    if ($null -eq $Context -or $null -eq $script:UI.Results) { return }
+    $script:UI.Results.Remove($Context) | Out-Null
+}
+
+function Get-ClampedResultOrigin {
+    param([int]$X, [int]$Y, [int]$Width, [int]$Height)
+    $result = @{ X = $X; Y = $Y }
+    $work = $null
+    try { $work = [ScreenUtil]::GetWorkArea($X, $Y) } catch { }
+    if (-not $work -or $work.Count -lt 4) { return $result }
+    $minX = [int]$work[0] + 8
+    $minY = [int]$work[1] + 8
+    $maxX = [int]$work[2] - $Width - 8
+    $maxY = [int]$work[3] - $Height - 8
+    if ($maxX -lt $minX) { $maxX = $minX }
+    if ($maxY -lt $minY) { $maxY = $minY }
+    if ($X -lt $minX) { $X = $minX }
+    if ($X -gt $maxX) { $X = $maxX }
+    if ($Y -lt $minY) { $Y = $minY }
+    if ($Y -gt $maxY) { $Y = $maxY }
+    $result.X = $X
+    $result.Y = $Y
+    return $result
+}
+
+# Computed before any result window is closed: the current window frame (or the
+# saved helper-state geometry when no window is visible) decides the placement.
+# Width/Height are content sizes in WPF DIP, X/Y are physical screen pixels.
+function Get-ResultPlacement {
+    $cfgResult = $null
+    if ($script:Cfg) { $cfgResult = $script:Cfg.result }
+    $defaultWidth = 500.0
+    $defaultHeight = 400.0
+    if ($cfgResult) {
+        if ($cfgResult.width) { $defaultWidth = [double]$cfgResult.width }
+        if ($cfgResult.height) { $defaultHeight = [double]$cfgResult.height }
+    }
+    if ($defaultWidth -lt 300) { $defaultWidth = 300 }
+    if ($defaultHeight -lt 200) { $defaultHeight = 200 }
+
+    $current = $script:UI.Result
+    if ($current -and -not (Test-ResultContextVisible $current)) { $current = $null }
+    if (-not $current) { $current = Get-LastVisibleResultContext -PinnedOnly }
+
+    if ($current) {
+        $contentWidth = 0.0
+        $contentHeight = 0.0
+        try {
+            $contentWidth = [double]$current.Window.Width - 24
+            $contentHeight = [double]$current.Window.Height - 24
+        } catch { }
+        if ([double]::IsNaN($contentWidth) -or $contentWidth -lt 100) { $contentWidth = $defaultWidth }
+        if ([double]::IsNaN($contentHeight) -or $contentHeight -lt 100) { $contentHeight = $defaultHeight }
+        $rect = $null
+        if ($current.Hwnd -and $current.Hwnd -ne [IntPtr]::Zero) {
+            try { $rect = [ForegroundInfo]::GetWindowRect($current.Hwnd) } catch { }
+        }
+        if ($rect -and $rect.Count -ge 4) {
+            $frameWidth = [int]$rect[2] - [int]$rect[0]
+            $frameHeight = [int]$rect[3] - [int]$rect[1]
+            if ($frameWidth -le 24 -or $frameHeight -le 24) {
+                $scale = 1.0
+                try { $scale = [ScreenUtil]::GetScaleAt([int]$rect[0], [int]$rect[1]) } catch { }
+                if ($scale -le 0) { $scale = 1.0 }
+                $frameWidth = [int](($contentWidth + 24) * $scale)
+                $frameHeight = [int](($contentHeight + 24) * $scale)
+            }
+            if ($current.Pinned) {
+                $origin = Get-ClampedResultOrigin -X ([int]$rect[0] - 24) -Y ([int]$rect[1] + 24) -Width $frameWidth -Height $frameHeight
+                return @{ Width = $contentWidth; Height = $contentHeight; X = [int]$origin.X; Y = [int]$origin.Y; Source = 'stack'; Pinned = $true }
+            }
+            return @{ Width = $contentWidth; Height = $contentHeight; X = [int]$rect[0]; Y = [int]$rect[1]; Source = 'same'; Pinned = $false }
+        }
+    }
+
+    $width = [double]$defaultWidth
+    $height = [double]$defaultHeight
+    if ($cfgResult -and [bool]$cfgResult.rememberSize -and $script:State) {
+        if ($null -ne $script:State['resultWidth']) { $width = [double]$script:State['resultWidth'] }
+        if ($null -ne $script:State['resultHeight']) { $height = [double]$script:State['resultHeight'] }
+    }
+    if ($width -lt 300) { $width = 300 }
+    if ($width -gt 900) { $width = 900 }
+    if ($height -lt 200) { $height = 200 }
+    if ($height -gt 900) { $height = 900 }
+    $savedX = $null
+    $savedY = $null
+    if ($script:State) {
+        if ($null -ne $script:State['resultX']) { $savedX = [int]$script:State['resultX'] }
+        if ($null -ne $script:State['resultY']) { $savedY = [int]$script:State['resultY'] }
+    }
+    if ($null -ne $savedX -and $null -ne $savedY) {
+        $scale = 1.0
+        try { $scale = [ScreenUtil]::GetScaleAt($savedX, $savedY) } catch { }
+        if ($scale -le 0) { $scale = 1.0 }
+        $frameWidth = [int](($width + 24) * $scale)
+        $frameHeight = [int](($height + 24) * $scale)
+        $origin = Get-ClampedResultOrigin -X $savedX -Y $savedY -Width $frameWidth -Height $frameHeight
+        return @{ Width = $width; Height = $height; X = [int]$origin.X; Y = [int]$origin.Y; Source = 'saved'; Pinned = $false }
+    }
+    return @{ Width = $width; Height = $height; X = $null; Y = $null; Source = 'default'; Pinned = $false }
+}
+
+# Called when the user finishes dragging the title bar: persist the origin.
+function OnSaveResultPosition {
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if (-not $Context -or -not $Context.Window) { return }
+    if ($null -eq $Context.Hwnd -or $Context.Hwnd -eq [IntPtr]::Zero) { return }
+    $rect = $null
+    try { $rect = [ForegroundInfo]::GetWindowRect($Context.Hwnd) } catch { }
+    if (-not $rect -or $rect.Count -lt 4) { return }
+    if ($script:UiHooks.OnSaveResultPosition) {
+        & $script:UiHooks.OnSaveResultPosition ([int]$rect[0]) ([int]$rect[1])
+    }
+}
+
+
 function Initialize-ResultWindow {
-    param([string]$ActionLabel, [string]$ActionId)
-    Close-ResultWindow
+    param([string]$ActionLabel, [string]$ActionId, $Placement = $null)
     $theme = Get-SystemTheme
     $pal = Get-UiPalette $theme
     $script:UI.ToolbarHover = $pal.Hover
@@ -545,15 +746,16 @@ function Initialize-ResultWindow {
     $cfgResult = $script:Cfg.result
     $width = 500.0
     $height = 400.0
-    if ($cfgResult) {
-        if ($cfgResult.width) { $width = [double]$cfgResult.width }
-        if ($cfgResult.height) { $height = [double]$cfgResult.height }
-    }
+    if ($Placement -and $null -ne $Placement['Width']) { $width = [double]$Placement['Width'] }
+    elseif ($cfgResult -and $cfgResult.width) { $width = [double]$cfgResult.width }
+    if ($Placement -and $null -ne $Placement['Height']) { $height = [double]$Placement['Height'] }
+    elseif ($cfgResult -and $cfgResult.height) { $height = [double]$cfgResult.height }
     if ($width -lt 300) { $width = 300 }
-    if ($width -gt 900) { $width = 900 }
     if ($height -lt 200) { $height = 200 }
-    if ($height -gt 900) { $height = 900 }
-
+    if (-not $Placement) {
+        if ($width -gt 900) { $width = 900 }
+        if ($height -gt 900) { $height = 900 }
+    }
     $opacity = 0.96
     $alwaysTop = $true
     if ($cfgResult) {
@@ -646,17 +848,24 @@ function Initialize-ResultWindow {
     $titlePin.Add_MouseLeftButtonUp({
             param($sender, $e)
             $e.Handled = $true
-            Toggle-ResultPinned
+            $ctx = Get-ResultContextFromSender $sender
+            if ($ctx) { Toggle-ResultPinned -Context $ctx }
         })
     $titleActions.Children.Add($titlePin) | Out-Null
 
     $titleCloseGlyph = New-UiText -Text ([char]0xE711) -Size 12 -Color $pal.Muted -Icon
     $titleCloseGlyph.VerticalAlignment = 'Center'
     $titleClose = New-UiHoverButton -Content $titleCloseGlyph -Radius 6 -Padding '8,4,8,4' -HoverColor $pal.Hover -Tag 'result-close' -Tooltip '关闭 (Esc)'
+    # Mark the close press handled too, so the title-bar drag never starts.
+    $titleClose.Add_MouseLeftButtonDown({
+            param($sender, $e)
+            $e.Handled = $true
+        })
     $titleClose.Add_MouseLeftButtonUp({
             param($sender, $e)
             $e.Handled = $true
-            if ($script:UiHooks.OnCloseResult) { & $script:UiHooks.OnCloseResult }
+            $ctx = Get-ResultContextFromSender $sender
+            if ($ctx -and $script:UiHooks.OnCloseResult) { & $script:UiHooks.OnCloseResult $ctx }
         })
     $titleClose.VerticalAlignment = 'Center'
     $titleActions.Children.Add($titleClose) | Out-Null
@@ -664,33 +873,41 @@ function Initialize-ResultWindow {
     $title.Child = $titleGrid
     $grid.Children.Add($title) | Out-Null
 
-    $script:UI.ResultDrag = @{ Active = $false; CursorX = 0; CursorY = 0; WinX = 0; WinY = 0 }
     $title.Add_MouseLeftButtonDown({
             param($sender, $e)
+            $ctx = Get-ResultContextFromSender $sender
+            if (-not $ctx) { return }
             $pos = [ScreenUtil]::GetCursorPos()
-            $rect = [ForegroundInfo]::GetWindowRect($script:UI.Result.Hwnd)
-            $script:UI.ResultDrag.Active = $true
-            $script:UI.ResultDrag.CursorX = $pos[0]
-            $script:UI.ResultDrag.CursorY = $pos[1]
-            $script:UI.ResultDrag.WinX = $rect[0]
-            $script:UI.ResultDrag.WinY = $rect[1]
+            $rect = [ForegroundInfo]::GetWindowRect($ctx.Hwnd)
+            $ctx.Drag.Active = $true
+            $ctx.Drag.CursorX = $pos[0]
+            $ctx.Drag.CursorY = $pos[1]
+            $ctx.Drag.WinX = $rect[0]
+            $ctx.Drag.WinY = $rect[1]
             [void]$sender.CaptureMouse()
             $e.Handled = $true
         })
     $title.Add_MouseMove({
             param($sender, $e)
-            if (-not $script:UI.ResultDrag.Active) { return }
+            $ctx = Get-ResultContextFromSender $sender
+            if (-not $ctx -or -not $ctx.Drag.Active) { return }
             $pos = [ScreenUtil]::GetCursorPos()
-            $nx = $script:UI.ResultDrag.WinX + ($pos[0] - $script:UI.ResultDrag.CursorX)
-            $ny = $script:UI.ResultDrag.WinY + ($pos[1] - $script:UI.ResultDrag.CursorY)
-            [WindowUtil]::MoveWindow($script:UI.Result.Hwnd, $nx, $ny, [bool]$script:UI.Result.Window.Topmost)
+            $nx = $ctx.Drag.WinX + ($pos[0] - $ctx.Drag.CursorX)
+            $ny = $ctx.Drag.WinY + ($pos[1] - $ctx.Drag.CursorY)
+            [WindowUtil]::MoveWindow($ctx.Hwnd, $nx, $ny, [bool]$ctx.Window.Topmost)
         })
     $title.Add_MouseLeftButtonUp({
             param($sender, $e)
-            $script:UI.ResultDrag.Active = $false
-            [void]$sender.ReleaseMouseCapture()
+            $ctx = Get-ResultContextFromSender $sender
+            if (-not $ctx) { return }
+            if ($ctx.Drag.Active) {
+                $ctx.Drag.Active = $false
+                OnSaveResultPosition -Context $ctx
+            }
+            try { [void]$sender.ReleaseMouseCapture() } catch { }
             $e.Handled = $true
         })
+
 
     # -- content row --------------------------------------------------------
     $content = [System.Windows.Controls.Grid]::new()
@@ -758,15 +975,15 @@ function Initialize-ResultWindow {
 
     $btnCopy = New-UiHoverButton -Radius 6 -Padding '10,4,10,4' -HoverColor $pal.Hover -Tag 'copy' -Tooltip '复制 (C)' -Content (
         (New-UiActionRow -Glyph ([char]0xE8C8) -Label '复制' -Palette $pal -Size 12))
-    $btnCopy.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; if ($script:UiHooks.OnCopyResult) { & $script:UiHooks.OnCopyResult } })
+    $btnCopy.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $ctx = Get-ResultContextFromSender $sender; if ($ctx -and $script:UiHooks.OnCopyResult) { & $script:UiHooks.OnCopyResult $ctx } })
     $buttons.Children.Add($btnCopy) | Out-Null
     $btnRegen = New-UiHoverButton -Radius 6 -Padding '10,4,10,4' -HoverColor $pal.Hover -Tag 'regen' -Tooltip '重新生成 (R)' -Content (
         (New-UiActionRow -Glyph ([char]0xE72C) -Label '重新生成' -Palette $pal -Size 12))
-    $btnRegen.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; if ($script:UiHooks.OnRegenerate) { & $script:UiHooks.OnRegenerate } })
+    $btnRegen.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $ctx = Get-ResultContextFromSender $sender; if ($ctx -and $script:UiHooks.OnRegenerate) { & $script:UiHooks.OnRegenerate $ctx } })
     $buttons.Children.Add($btnRegen) | Out-Null
     $btnClose = New-UiHoverButton -Radius 6 -Padding '10,4,10,4' -HoverColor $pal.Hover -Tag 'close' -Tooltip '关闭 (Esc)' -Content (
         (New-UiActionRow -Glyph ([char]0xE711) -Label '关闭' -Palette $pal -Size 12))
-    $btnClose.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; if ($script:UiHooks.OnCloseResult) { & $script:UiHooks.OnCloseResult } })
+    $btnClose.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $ctx = Get-ResultContextFromSender $sender; if ($ctx -and $script:UiHooks.OnCloseResult) { & $script:UiHooks.OnCloseResult $ctx } })
     $buttons.Children.Add($btnClose) | Out-Null
     $bottomGrid.Children.Add($buttons) | Out-Null
     $bottom.Child = $bottomGrid
@@ -786,18 +1003,20 @@ function Initialize-ResultWindow {
     $thumb.Margin = [System.Windows.Thickness]::new(0, 0, 3, 3)
     $thumb.Add_DragDelta({
             param($sender, $e)
-            $w = $script:UI.Result.Window
-            if (-not $w) { return }
-            $newW = [Math]::Max(324, $w.Width + $e.HorizontalChange)
-            $newH = [Math]::Max(224, $w.Height + $e.VerticalChange)
-            $w.Width = $newW
-            $w.Height = $newH
-            $script:UI.Result.Resized = $true
+            $ctx = Get-ResultContextFromSender $sender
+            if (-not $ctx -or -not $ctx.Window) { return }
+            $newW = [Math]::Max(324, $ctx.Window.Width + $e.HorizontalChange)
+            $newH = [Math]::Max(224, $ctx.Window.Height + $e.VerticalChange)
+            $ctx.Window.Width = $newW
+            $ctx.Window.Height = $newH
+            $ctx.Resized = $true
         })
     $thumb.Add_DragCompleted({
             param($sender, $e)
-            if ($script:UI.Result.Resized -and $script:UiHooks.OnSaveResultSize) {
-                & $script:UiHooks.OnSaveResultSize ($script:UI.Result.Window.Width) ($script:UI.Result.Window.Height)
+            $ctx = Get-ResultContextFromSender $sender
+            if (-not $ctx -or -not $ctx.Resized) { return }
+            if ($script:UiHooks.OnSaveResultSize) {
+                & $script:UiHooks.OnSaveResultSize ($ctx.Window.Width) ($ctx.Window.Height)
             }
         })
     $content.Children.Add($thumb) | Out-Null
@@ -810,68 +1029,96 @@ function Initialize-ResultWindow {
     $content.Children.Add($gripHint) | Out-Null
 
     $win.Content = $outer
+    $win.Add_Activated({
+            param($sender, $e)
+            $ctx = Get-ResultContextFromSender $sender
+            if ($ctx) { $script:UI.Result = $ctx }
+        })
     $win.Add_SourceInitialized({
             param($sender, $e)
-            $script:UI.Result.Hwnd = ([System.Windows.Interop.WindowInteropHelper]::new($script:UI.Result.Window)).Handle
-            [WindowUtil]::MakeToolWindow($script:UI.Result.Hwnd)
+            $ctx = Get-ResultContextFromSender $sender
+            if (-not $ctx) { return }
+            $ctx.Hwnd = ([System.Windows.Interop.WindowInteropHelper]::new($ctx.Window)).Handle
+            [WindowUtil]::MakeToolWindow($ctx.Hwnd)
         })
     $win.Add_Deactivated({
             param($sender, $e)
-            if (-not $script:UI.Result) { return }
-            if ($script:UI.Result.Pinned) { return }
-            if ($script:Cfg.result.autoClose -and -not $script:SuppressAutoClose) {
-                if ($script:UiHooks.OnCloseResult) { & $script:UiHooks.OnCloseResult }
-            }
+            $ctx = Get-ResultContextFromSender $sender
+            if (-not $ctx) { return }
+            if ($ctx.Pinned) { return }
+            if (-not $script:Cfg -or -not $script:Cfg.result.autoClose) { return }
+            if ($script:SuppressAutoClose) { return }
+            if ($script:UiHooks.OnCloseResult) { & $script:UiHooks.OnCloseResult $ctx }
+        })
+    # Safety net for a window closed by the system (Alt+F4, session end):
+    # Close-ResultWindow already removes the context before it calls Close().
+    $win.Add_Closed({
+            param($sender, $e)
+            $ctx = Get-ResultContextFromSender $sender
+            if (-not $ctx) { return }
+            try { if ($ctx.Stream) { $ctx.Stream.Cancel() } } catch { }
+            $ctx.Stream = $null
+            Remove-ResultContext $ctx
+            if ($script:UI.Result -eq $ctx) { $script:UI.Result = Get-ResultFallbackContext }
         })
     $win.Add_PreviewKeyDown({
             param($sender, $e)
             try {
+                $ctx = Get-ResultContextFromSender $sender
+                if (-not $ctx) { return }
                 if ($e.Key -eq [System.Windows.Input.Key]::Escape) {
                     $e.Handled = $true
-                    if ($script:UiHooks.OnCloseResult) { & $script:UiHooks.OnCloseResult }
+                    if ($script:UiHooks.OnCloseResult) { & $script:UiHooks.OnCloseResult $ctx }
                     return
                 }
                 if ([System.Windows.Input.Keyboard]::Modifiers -ne [System.Windows.Input.ModifierKeys]::None) { return }
                 if ($e.Key -eq [System.Windows.Input.Key]::C) {
                     $e.Handled = $true
-                    if ($script:UiHooks.OnCopyResult) { & $script:UiHooks.OnCopyResult }
+                    if ($script:UiHooks.OnCopyResult) { & $script:UiHooks.OnCopyResult $ctx }
                 } elseif ($e.Key -eq [System.Windows.Input.Key]::R) {
                     $e.Handled = $true
-                    if ($script:UiHooks.OnRegenerate) { & $script:UiHooks.OnRegenerate }
+                    if ($script:UiHooks.OnRegenerate) { & $script:UiHooks.OnRegenerate $ctx }
                 }
             } catch { }
         })
 
-    $script:UI.Result = @{
-        Window     = $win
-        Hwnd       = [IntPtr]::Zero
-        RichBox    = $rtb
-        Loading    = $loading
-        LoadingText = $loadingText
-        TitleLabel = $titleLabel
-        ModelTag   = $modelTag
-        StatusText = $statusText
-        Palette    = $pal
-        Theme      = $theme
-        ActionId   = $ActionId
-        ActionLabel = $ActionLabel
-        Text       = ''
-        LoadingOn  = $true
-        Dirty      = $false
-        HasDelta   = $false
-        Done       = $false
-        Error      = ''
-        Resized    = $false
-        ModelLabel = ''
-        Provider   = ''
-        Model      = ''
-        Pinned     = $false
+    $res = @{
+        Window         = $win
+        Hwnd           = [IntPtr]::Zero
+        RichBox        = $rtb
+        Loading        = $loading
+        LoadingText    = $loadingText
+        TitleLabel     = $titleLabel
+        ModelTag       = $modelTag
+        StatusText     = $statusText
+        Palette        = $pal
+        Theme          = $theme
+        ActionId       = $ActionId
+        ActionLabel    = $ActionLabel
+        Text           = ''
+        LoadingOn      = $true
+        Dirty          = $false
+        HasDelta       = $false
+        Done           = $false
+        Error          = ''
+        Resized        = $false
+        ModelLabel     = ''
+        Provider       = ''
+        Model          = ''
+        Pinned         = $false
         DefaultTopmost = $alwaysTop
-        PinButton  = $titlePin
-        PinGlyph   = $titlePinGlyph
+        PinButton      = $titlePin
+        PinGlyph       = $titlePinGlyph
+        Stream         = $null
+        SourceText     = ''
+        App            = ''
+        Drag           = @{ Active = $false; CursorX = 0; CursorY = 0; WinX = 0; WinY = 0 }
     }
+    Add-ResultContext $res
+    $script:UI.Result = $res
     return $win
 }
+
 
 function New-UiActionRow {
     param([char]$Glyph, [string]$Label, $Palette, [double]$Size = 12)
@@ -891,25 +1138,39 @@ function New-UiActionRow {
 }
 
 function Show-ResultWindow {
-    param([string]$ActionLabel, [string]$ActionId)
-    $win = Initialize-ResultWindow -ActionLabel $ActionLabel -ActionId $ActionId
+    param([string]$ActionLabel, [string]$ActionId, $Placement = $null)
+    if ($null -eq $Placement) { $Placement = Get-ResultPlacement }
+    $win = Initialize-ResultWindow -ActionLabel $ActionLabel -ActionId $ActionId -Placement $Placement
     $script:SuppressAutoClose = $false
     $win.Show()
     $win.UpdateLayout()
-    [WindowUtil]::MakeToolWindow($script:UI.Result.Hwnd)
+    $ctx = $script:UI.Result
+    if (-not $ctx) { return $null }
+    [WindowUtil]::MakeToolWindow($ctx.Hwnd)
     try { $win.Activate() } catch { }
-    Set-ResultWindowPosition
+    if ($Placement -and $null -ne $Placement['X'] -and $null -ne $Placement['Y']) {
+        Set-ResultWindowPosition -Context $ctx -X ([int]$Placement['X']) -Y ([int]$Placement['Y'])
+    } else {
+        Set-ResultWindowPosition -Context $ctx
+    }
     $win.Opacity = 0.0
     $op = 0.96
     if ($script:Cfg.result -and $null -ne $script:Cfg.result.opacity) { $op = [double]$script:Cfg.result.opacity }
     $win.Opacity = $op
+    return $ctx
 }
 
 function Set-ResultWindowPosition {
-    if (-not $script:UI.Result) { return }
-    $win = $script:UI.Result.Window
-    $hwnd = $script:UI.Result.Hwnd
-    if ($hwnd -eq [IntPtr]::Zero) { return }
+    param($Context = $null, $X = $null, $Y = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if (-not $Context -or -not $Context.Window) { return }
+    $win = $Context.Window
+    $hwnd = $Context.Hwnd
+    if ($null -eq $hwnd -or $hwnd -eq [IntPtr]::Zero) { return }
+    if ($null -ne $X -and $null -ne $Y) {
+        [WindowUtil]::MoveWindow($hwnd, [int]$X, [int]$Y, [bool]$win.Topmost)
+        return
+    }
     $rect = [ForegroundInfo]::GetWindowRect($hwnd)
     $w = $rect[2] - $rect[0]
     $h = $rect[3] - $rect[1]
@@ -939,47 +1200,62 @@ function Set-ResultWindowPosition {
 }
 
 function Get-ResultRect {
-    if (-not $script:UI.Result -or $script:UI.Result.Hwnd -eq [IntPtr]::Zero) { return $null }
-    return [ForegroundInfo]::GetWindowRect($script:UI.Result.Hwnd)
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if (-not $Context) { return $null }
+    if ($null -eq $Context.Hwnd -or $Context.Hwnd -eq [IntPtr]::Zero) { return $null }
+    return [ForegroundInfo]::GetWindowRect($Context.Hwnd)
 }
 
-function Get-ResultVisible { return [bool]($script:UI.Result -and $script:UI.Result.Window -and $script:UI.Result.Window.IsVisible) }
+function Get-ResultVisible {
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    return [bool](Test-ResultContextVisible $Context)
+}
 
 # Pinned result window: stay visible and topmost until the user unpins it.
 # Topmost falls back to the configured result.alwaysOnTop value when unpinned.
 function Set-ResultPinned {
-    param([bool]$Pinned)
-    if (-not $script:UI.Result) { return }
-    $res = $script:UI.Result
-    if (-not $res.Window) { return }
-    $res.Pinned = $Pinned
+    param([bool]$Pinned, $Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if (-not $Context -or -not $Context.Window) { return }
+    $Context.Pinned = $Pinned
     if ($Pinned) {
-        $res.Window.Topmost = $true
-        if ($res.PinGlyph) { $res.PinGlyph.Text = [char]0xE840; $res.PinGlyph.Foreground = Get-UiBrush $res.Palette.Accent }
-        if ($res.PinButton) { $res.PinButton.ToolTip = '取消钉住' }
+        $Context.Window.Topmost = $true
+        if ($Context.PinGlyph) { $Context.PinGlyph.Text = [char]0xE840; $Context.PinGlyph.Foreground = Get-UiBrush $Context.Palette.Accent }
+        if ($Context.PinButton) { $Context.PinButton.ToolTip = '取消钉住' }
     } else {
-        $res.Window.Topmost = [bool]$res.DefaultTopmost
-        if ($res.PinGlyph) { $res.PinGlyph.Text = [char]0xE718; $res.PinGlyph.Foreground = Get-UiBrush $res.Palette.Muted }
-        if ($res.PinButton) { $res.PinButton.ToolTip = '钉在最前' }
+        $Context.Window.Topmost = [bool]$Context.DefaultTopmost
+        if ($Context.PinGlyph) { $Context.PinGlyph.Text = [char]0xE718; $Context.PinGlyph.Foreground = Get-UiBrush $Context.Palette.Muted }
+        if ($Context.PinButton) { $Context.PinButton.ToolTip = '钉在最前' }
     }
 }
 
 function Toggle-ResultPinned {
-    if (-not $script:UI.Result) { return }
-    Set-ResultPinned -Pinned (-not [bool]$script:UI.Result.Pinned)
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if (-not $Context) { return }
+    Set-ResultPinned -Pinned (-not [bool]$Context.Pinned) -Context $Context
 }
 
 function Get-ResultPinned {
-    if (-not $script:UI.Result) { return $false }
-    return [bool]$script:UI.Result.Pinned
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if (-not $Context) { return $false }
+    return [bool]$Context.Pinned
 }
 
 function Close-ResultWindow {
-    if (-not $script:UI.Result) { return }
-    $res = $script:UI.Result
-    $script:UI.Result = $null
-    try { $res.Window.Close() } catch { }
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if ($null -eq $Context) { return }
+    try { if ($Context.Stream) { $Context.Stream.Cancel() } } catch { }
+    $Context.Stream = $null
+    Remove-ResultContext $Context
+    if ($script:UI.Result -eq $Context) { $script:UI.Result = Get-ResultFallbackContext }
+    try { if ($Context.Window) { $Context.Window.Close() } } catch { }
 }
+
 
 function Set-ResultMeta {
     param([string]$Provider, [string]$Model, [string]$Label)
@@ -1056,16 +1332,22 @@ function Set-ResultText {
 }
 
 function Update-ResultRender {
-    if (-not $script:UI.Result -or -not $script:UI.Result.Dirty) { return }
-    $script:UI.Result.Dirty = $false
-    $rtb = $script:UI.Result.RichBox
-    $pal = $script:UI.Result.Palette
-    $text = $script:UI.Result.Text
-    $doc = Convert-MarkdownToFlowDocument -Text $text -Palette $pal
-    $rtb.Document = $doc
-    try { $rtb.ScrollToEnd() } catch { }
-    if ($script:UI.Result.LoadingOn) { Set-ResultLoading $false }
+    if (-not $script:UI -or $null -eq $script:UI.Results) { return }
+    foreach ($ctx in @($script:UI.Results)) {
+        if ($null -eq $ctx -or -not $ctx.Dirty) { continue }
+        $ctx.Dirty = $false
+        try {
+            $doc = Convert-MarkdownToFlowDocument -Text ([string]$ctx.Text) -Palette $ctx.Palette
+            $ctx.RichBox.Document = $doc
+            try { $ctx.RichBox.ScrollToEnd() } catch { }
+            if ($ctx.LoadingOn) {
+                $ctx.LoadingOn = $false
+                if ($ctx.Loading) { $ctx.Loading.Visibility = 'Collapsed' }
+            }
+        } catch { }
+    }
 }
+
 
 # Lightweight markdown subset: **bold**, `inline code`, fenced code blocks, "- " lists.
 function Convert-MarkdownToFlowDocument {
@@ -1172,19 +1454,42 @@ function Add-InlineRuns {
 }
 
 function Get-ResultText {
-    if (-not $script:UI.Result) { return '' }
-    return [string]$script:UI.Result.Text
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if ($null -eq $Context) { return '' }
+    return [string]$Context.Text
 }
 
 function Update-LoadingAnimation {
-    if (-not $script:UI.Result -or -not $script:UI.Result.LoadingOn) { return }
+    if (-not $script:UI -or $null -eq $script:UI.Results) { return }
+    $hasLoading = $false
+    foreach ($ctx in @($script:UI.Results)) {
+        if ($ctx -and $ctx.LoadingOn) { $hasLoading = $true; break }
+    }
+    if (-not $hasLoading) { return }
     $script:UI.LoadAnim = ($script:UI.LoadAnim + 1) % 4
     $dots = '.' * $script:UI.LoadAnim
-    $script:UI.Result.LoadingText.Text = '正在生成' + $dots
+    foreach ($ctx in @($script:UI.Results)) {
+        if ($null -eq $ctx -or -not $ctx.LoadingOn) { continue }
+        if ($ctx.LoadingText) { $ctx.LoadingText.Text = '正在生成' + $dots }
+    }
+}
+
+function Close-AllResultWindows {
+    $contexts = @()
+    if ($script:UI.Results) { $contexts = @($script:UI.Results) }
+    if ($script:UI.Results) { $script:UI.Results.Clear() }
+    $script:UI.Result = $null
+    foreach ($ctx in $contexts) {
+        if ($null -eq $ctx) { continue }
+        try { if ($ctx.Stream) { $ctx.Stream.Cancel() } } catch { }
+        $ctx.Stream = $null
+        try { if ($ctx.Window) { $ctx.Window.Close() } } catch { }
+    }
 }
 
 function Close-AllUi {
     Close-ToolbarWindow
     Close-UiToast
-    Close-ResultWindow
+    Close-AllResultWindows
 }

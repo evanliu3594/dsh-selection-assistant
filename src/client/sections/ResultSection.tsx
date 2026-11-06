@@ -52,6 +52,7 @@ export function ResultSection({ t, settings, update }: ResultSectionProps) {
         display={t('result.opacityValue', { percent: Math.round(result.opacity * 100) })}
         onChange={(next) => { update({ result: { opacity: next / 100 } }) }}
       />
+      <p className="sa-row-hint">{t('result.geometryHint')}</p>
     </SectionCard>
   )
 }

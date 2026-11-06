@@ -145,7 +145,7 @@ interface ActionSettings {
     },
     "defaults": { "provider": "deepseek-account", "model": "deepseek-flash", "reasoningEffort": "" },
     "paths": { "dataDir": "C:\\Users\\Evan\\.dsh\\selection-assistant", "log": "C:\\...\\helper.log" },
-    "version": "0.2.0"
+    "version": "0.2.1"
   }
 }
 ```
@@ -309,8 +309,15 @@ macOS helper 还接受只在开发/验证时使用的命令行参数（直跑内
 helper 状态文件 `helper-state.json`（helper 写）：
 
 ```json
-{ "version": 1, "pid": 1234, "startedAt": 1730000000000, "resultWidth": 440, "resultHeight": 320, "lastActionId": "translate" }
+{ "version": 1, "pid": 1234, "startedAt": 1730000000000,
+  "resultX": 220, "resultY": 180,
+  "resultWidth": 500, "resultHeight": 400,
+  "lastActionId": "translate" }
 ```
+
+- `resultX`/`resultY`：结果窗 frame 原点（屏幕坐标）。只在用户手动拖动结束后写入；0.2.1 起用于固化位置。
+- `resultWidth`/`resultHeight`：内容区尺寸（窗口宽高减 24）。用户手动缩放结束后写入；`rememberSize` 控制是否沿用。
+- 两者都由 helper 自己读写，宿主不解析位置字段。`
 
 ## 6. 触发语义（选中文字后长按触发键出现划词助手）
 
@@ -344,11 +351,13 @@ helper 状态文件 `helper-state.json`（helper 写）：
 
 ### 结果窗
 
-- 跟随工具栏出现在其下方（空间不足时上方），不跟随则屏幕居中并在工作区内。
+- 首次出现：跟随工具栏下方（空间不足时上方），不跟随则屏幕居中并在工作区内。
 - 结构：标题行（动作名 + 模型标签 + 拖动 + 关闭）→ 内容区（只读、可选中、可滚动）→ 底栏（复制 / 重新生成 / 关闭）。
 - 流式输出：先显示 loading 动画，收到首个 delta 后逐字追加；支持 `**粗体**`、行内代码、代码块、`- ` 列表的轻量渲染，其余按纯文本。
-- `autoClose` 打开时，结果窗失去焦点即关闭（流式中仍关闭并 abort 请求）。
+- `autoClose` 打开时，未 pin 的结果窗失去焦点即关闭（流式中仍关闭并 abort 请求）；pin 窗不关闭。
 - `rememberSize` 打开时，用户拖动右下角改变尺寸后写回 helper-state，下次沿用。
+- 几何固化（0.2.1）：用户手动拖动/缩放后，位置与尺寸写入 helper-state；下一次结果窗沿用。当前结果窗未 pin 时先关闭它，新窗在原位同尺寸出现；当前结果窗 pin 时保留旧窗，新窗同尺寸并向左下偏移 24。多个 pin 窗可同时存在，各自独立流式、关闭、复制、重新生成。
+- 详细口径见 `references/result-window-geometry.md`。
 - `opacity` 作用于整个窗口；`alwaysOnTop` 控制置顶（Windows：Topmost；macOS：窗口 level）。
 
 ### 图标

@@ -102,6 +102,7 @@ export const zh = {
   'result.opacity': '透明度',
   'result.opacityHint': '范围 20% 到 100%。',
   'result.opacityValue': '{percent}%',
+  'result.geometryHint': '手动调整过位置或大小后，下一次结果窗会沿用；钉住的窗口会保留，新窗口向左下偏移 24 像素（macOS 为 24 点）。',
 
   'actions.title': '功能列表',
   'actions.desc': '工具栏上按顺序显示的动作。内置动作可以禁用，不能删除。',
@@ -307,6 +308,7 @@ export const en: Record<SelectionLocaleKey, string> = {
   'result.opacity': 'Opacity',
   'result.opacityHint': 'From 20% to 100%.',
   'result.opacityValue': '{percent}%',
+  'result.geometryHint': 'After you move or resize a result window, the next one reuses that geometry. Pinned windows stay open; a new window appears 24px (24pt on macOS) left and down.',
 
   'actions.title': 'Actions',
   'actions.desc': 'Actions appear on the toolbar in this order. Built-in actions can be disabled but not deleted.',

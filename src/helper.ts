@@ -68,9 +68,9 @@ function readVersion(): string {
   try {
     const raw: unknown = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'))
     const version = (raw as { version?: unknown }).version
-    return typeof version === 'string' ? version : '0.2.0'
+    return typeof version === 'string' ? version : '0.2.1'
   } catch {
-    return '0.2.0'
+    return '0.2.1'
   }
 }
 

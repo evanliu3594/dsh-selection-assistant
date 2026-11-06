@@ -65,6 +65,15 @@ macOS 27 的 `open --args` 不传参数，因此配置路径走 UserDefaults。h
 - 辅助功能未授权时：用 `AXIsProcessTrustedWithOptions` 提示一次，上报 `error + permissions.accessibility=false`，进程保持运行；每 1.5 秒复查，授权后安装 CGEventTap 并上报 `ready + true`。
 - 事件 tap 使用 `CGEventTap`（listenOnly），运行在独立线程；取词发送 ⌘C，若 Control 物理按下会先释放再恢复。
 
+## 结果窗几何与多窗口
+
+- 所有模型结果窗共享一套几何。拖动标题栏结束写 `resultX/resultY`，缩放结束写 `resultWidth/resultHeight`。
+- 新结果窗创建前先取当前窗口 frame 与 pin 状态，再关闭所有未 pin 结果窗。
+- 当前窗未 pin：新窗在原位、同尺寸。
+- 当前窗已 pin：旧窗保留，新窗同尺寸并向左下偏移 24 点（AppKit 原点 `x-24, y-24`），钳制到工作区。
+- 每个结果窗是独立 `ResultSession`，拥有自己的 SSE/本地流、pin、关闭与重新生成；多个 pin 窗可同时存在。
+- 详细口径见 [references/result-window-geometry.md](../../references/result-window-geometry.md)。
+
 ## 文件职责
 
 | 文件 | 职责 |
@@ -93,7 +102,7 @@ helper/macos/bin/SelectionAssistant.app/Contents/MacOS/SelectionAssistant \
   --config <config.json> --selftest --screenshot-dir <dir>
 ```
 
-通过时最后一行是 `SELFTEST: PASS`，退出码 0。`selftest-result.json` 字段：`ok`、`clicked`、`pinToggled`、`resizeOk`、`done`、`error`、`toolbarShot`、`resultShot`、`toolbarSize`、`resultSize`、`durationMs`、`pid`。
+通过时最后一行是 `SELFTEST: PASS`，退出码 0。`selftest-result.json` 字段：`ok`、`clicked`、`pinToggled`、`resizeOk`、`stackOk`、`sessionCount`、`done`、`error`、`toolbarShot`、`resultShot`、`toolbarSize`、`resultSize`、`durationMs`、`pid`。
 
 宿主级自动验证：
 
@@ -106,6 +115,7 @@ node scripts/verify-host-macos.mjs     # 真实 HelperManager 启动 app + 预�
 
 - 辅助功能授权无法由脚本代授予；授权后的真实拖选、长按 Control、⌘C 取词需人工验收。System Settings 列表里可能显示为“划词助手”。
 - 重新编译会改变 ad-hoc 签名，System Settings 里的授权可能需要重新添加。
+- 自动化验证的 config/data 目录放在系统临时目录。LaunchServices 启动的 app 读取仓库/桌面下的配置会触发 macOS「桌面文件夹」TCC，自动验证不要使用 Desktop 路径。
 - 深色主题、溢出菜单视觉、多屏混合 DPI 尚未逐项截图验收。
 - 取词依赖剪贴板；部分沙箱应用可能忽略模拟的 ⌘C。
 - `advanced.helperPath` 指向自定义路径时，应填 `.app`；填内层二进制会绕过 LaunchServices，权限归属会算到 DSH。

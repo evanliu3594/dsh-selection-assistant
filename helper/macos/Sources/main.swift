@@ -36,7 +36,12 @@ private func parseLaunchOptions() -> LaunchOptions {
 
     // Normal mode is launched by LaunchServices, which does not forward argv.
     // Read the same settings through the app domain written by the defaults CLI.
-    let defaults = UserDefaults(suiteName: helperBundleIdentifier) ?? UserDefaults.standard
+    let defaults: UserDefaults
+    if Bundle.main.bundleIdentifier == helperBundleIdentifier {
+        defaults = .standard
+    } else {
+        defaults = UserDefaults(suiteName: helperBundleIdentifier) ?? .standard
+    }
     if options.configPath == nil, !options.selftest {
         if let path = defaults.string(forKey: "HelperConfigPath")?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
             options.configPath = path

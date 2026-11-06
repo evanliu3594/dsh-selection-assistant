@@ -15,6 +15,7 @@ final class SelfTestRunner {
     private var clicked = false
     private var pinToggled = false
     private var resizeOk = false
+    private var stackOk = false
     private var error = ""
     private var toolbarShot = ""
     private var resultShot = ""
@@ -135,7 +136,34 @@ final class SelfTestRunner {
                     fail("结果窗改尺寸后内容区未重排", controller: controller)
                     return
                 }
-                controller.logger.info("自测点击动作按钮、pin 两次与窗口缩放重排校验通过")
+
+                // Stacking: keep the first window pinned, open a second result
+                // window and verify the old one stays, same size, offset (-24,-24).
+                let firstWindow = result
+                let firstFrame = firstWindow.frame
+                let firstSize = firstWindow.contentSize
+                if !firstWindow.performPinClick() {
+                    fail("再次 pin 第一窗失败", controller: controller)
+                    return
+                }
+                controller.performAction(actionId)
+                guard controller.sessions.count >= 2,
+                      let secondWindow = controller.result,
+                      secondWindow !== firstWindow else {
+                    fail("第二次动作未创建独立结果窗", controller: controller)
+                    return
+                }
+                let oldVisible = firstWindow.isVisible
+                let sameSize = abs(secondWindow.contentSize.width - firstSize.width) < 1
+                    && abs(secondWindow.contentSize.height - firstSize.height) < 1
+                let deltaX = secondWindow.frame.origin.x - firstFrame.origin.x
+                let deltaY = secondWindow.frame.origin.y - firstFrame.origin.y
+                stackOk = oldVisible && sameSize && abs(deltaX + 24) < 1 && abs(deltaY + 24) < 1
+                if !stackOk {
+                    fail("多窗口堆叠不符合预期 oldVisible=(oldVisible) sameSize=(sameSize) dx=(deltaX) dy=(deltaY)", controller: controller)
+                    return
+                }
+                controller.logger.info("自测点击动作按钮、pin 两次、缩放重排与多窗口堆叠校验通过")
                 step = 3
                 stepAt = current
             }
@@ -204,13 +232,15 @@ final class SelfTestRunner {
         let toolbarValid = !toolbarShot.isEmpty && fileManager.fileExists(atPath: toolbarShot) && toolbarSize.width >= 50 && toolbarSize.height >= 20
         let resultValid = !resultShot.isEmpty && fileManager.fileExists(atPath: resultShot) && resultSize.width >= 50 && resultSize.height >= 20
         let streamDone = controller.result?.isDone ?? false
-        let ok = clicked && pinToggled && resizeOk && streamDone && error.isEmpty && toolbarValid && resultValid
+        let ok = clicked && pinToggled && resizeOk && stackOk && streamDone && error.isEmpty && toolbarValid && resultValid
 
         let payload: [String: Any] = [
             "ok": ok,
             "clicked": clicked,
             "pinToggled": pinToggled,
             "resizeOk": resizeOk,
+            "stackOk": stackOk,
+            "sessionCount": controller.sessions.count,
             "done": streamDone,
             "toolbarShot": toolbarShot,
             "resultShot": resultShot,
@@ -249,7 +279,7 @@ final class SelfTestRunner {
         }
         print("SELFTEST: \(ok ? "PASS" : "FAIL")")
         if !ok {
-            controller.logger.error("自测未通过 clicked=\(clicked) pinToggled=\(pinToggled) resizeOk=\(resizeOk) done=\(streamDone) error=\(error)")
+            controller.logger.error("自测未通过 clicked=\(clicked) pinToggled=\(pinToggled) resizeOk=\(resizeOk) stackOk=\(stackOk) done=\(streamDone) error=\(error)")
         }
         return ok
     }

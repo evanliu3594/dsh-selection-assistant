@@ -1,10 +1,10 @@
-# 验证记录 — dsh-selection-assistant（0.1.0 Windows / 0.2.0 双端）
+# 验证记录 — dsh-selection-assistant（0.1.0 Windows / 0.2.0 双端 / 0.2.1 结果窗几何）
 
 0.1.0 验证环境：Windows 11、DSH 桌面版 0.2.2-rc.1（desktop profile）、PowerShell 7.6.9、DSH 默认模型 `deepseek-account / deepseek-flash`。
 
-0.2.0 验证环境：macOS 27.2（arm64）、Swift 6.4.2（Xcode Command Line Tools）、Node 26.13.0、DSH 桌面版 0.2.1-rc.3。
+0.2.0 与 0.2.1 验证环境：macOS 27.2（arm64）、Swift 6.4.2（Xcode Command Line Tools）、Node 26.13.0、DSH 桌面版 0.2.1-rc.3。Windows 结果窗改动在本机只做 PowerShell 语法与纯函数几何校验，未运行 WPF。
 
-本文件保留 0.1.0 的完整验证记录。0.2.0 的 macOS 验证见第 9 节；开发期的内部迭代编号已并入对应版本。
+本文件保留 0.1.0 的完整验证记录。0.2.0 的 macOS 验证见第 9 节，0.2.1 的结果窗几何验证见第 10 节。
 
 ## 1. 验证矩阵与结果
 
@@ -222,3 +222,43 @@
 - 构建与验证命令输出：本轮会话输出；`helper/macos/bin/SelectionAssistant.app`（gitignored）。
 - 截图：`.verify-macos-helper-*/`（自测与 mock 预览），`.tools/dark-run/`（深色未生效对照）。
 - 宿主集成日志：`.verify-host-macos-*/`（plugin.log、helper.log、helper-state.json、command.json）。
+
+## 10. 0.2.1 结果窗几何固化与多窗口验证（2026-11-06）
+
+### 10.1 macOS
+
+| 面 | 命令 / 方法 | 结果 |
+|---|---|---|
+| 构建 | `node scripts/verify-macos-helper.mjs --keep` 内的 swiftc 构建 | PASS：646944 字节，arm64，macOS 13.1 |
+| 自测 | `--selftest` | PASS：`ok/clicked/pinToggled/resizeOk/stackOk/done` 全 true，`sessionCount=2` |
+| 第二窗口几何 | selftest 断言 | 首窗 pin 后开第二窗，旧窗仍可见、内容尺寸相同、原点相对首窗 `(-24,-24)` |
+| 助手端到端 | `node scripts/verify-macos-helper.mjs` | PASS：LaunchServices、status/log、preview SSE、截图、健康退出 |
+| 宿主管线 | `node scripts/verify-host-macos.mjs` | PASS：真实 HelperManager 构建启动、预览动作、SIGTERM 回收 |
+| 通用门 | `build`、`probe`、`verify-host`、`verify-client-bundle` | PASS |
+| 截图 | 自测工具栏与结果窗 | 工具栏 404×128，结果窗 1048×848；窗口布局正常 |
+
+验证数据目录改到系统临时目录（`mkdtempSync(tmpdir())`）。LaunchServices 启动的 app 读取仓库（Desktop）内配置会触发 macOS“桌面文件夹”TCC；生产数据目录是 `~/.dsh/selection-assistant`，不受影响。
+
+### 10.2 Windows
+
+本机无 Windows/WPF 运行环境，使用 macOS 上的 PowerShell 7.6.9 做静态与纯函数验证：
+
+| 面 | 方法 | 结果 |
+|---|---|---|
+| 语法 | `[Parser]::ParseFile` 解析 `Ui.ps1`、`SelectionAssistant.ps1`、`selftest.ps1` | PASS，无语法错误 |
+| 默认定位 | 无当前窗、无保存几何 | PASS：返回默认 placement，跟随/居中由原逻辑处理 |
+| pin 堆叠 | 当前窗 pin | PASS：内容尺寸同旧窗，原点 `X-24 / Y+24` |
+| 未 pin 原位 | 当前窗未 pin | PASS：原点与尺寸沿用当前窗 |
+| 保存几何 | 无当前窗、状态含 `resultX/resultY/resultWidth/Height` | PASS：使用保存值与 rememberedSize |
+| 结果列表 | 多上下文移除 | PASS：只移除目标上下文 |
+| 自测断言 | 代码审阅 | 已新增 `stackOk/stackOffsetX/stackOffsetY/stackSameSize/oldVisible` 与多窗口步骤；未运行 WPF |
+
+Windows 待实机验收：`helper/selftest.ps1`（含新增多窗口断言）、真实拖动/缩放保存、pin 叠窗与多屏混合 DPI。预期 selftest PASS 数比 0.2.0 增加 1 项（多窗口断言）。
+
+### 10.3 未验证 / 人工验收
+
+1. Windows 实机自测与真实 WPF 多窗口交互。
+2. macOS 辅助功能授权后的真实拖选、⌘C、点击外部/失焦、多 pin 窗交互。
+3. 两端手动拖动/缩放后的位置保存与重启后恢复。
+4. 深色主题、溢出菜单、多屏/混合 DPI、Intel 实机。
+5. 真实 DeepSeek 端到端。

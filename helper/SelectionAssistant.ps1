@@ -25,7 +25,6 @@ $script:ExitCode = 0
 $script:Cfg = $null
 $script:State = @{}
 $script:HooksInstalled = $false
-$script:Stream = $null
 $script:LogLevel = 2
 $script:LastErrorLogAt = 0
 $script:LastCommandId = ''
@@ -225,6 +224,8 @@ function Read-State {
     if ($raw) {
         if ($raw.resultWidth) { $state.resultWidth = [double]$raw.resultWidth }
         if ($raw.resultHeight) { $state.resultHeight = [double]$raw.resultHeight }
+        if ($null -ne $raw.resultX) { $state.resultX = [int]$raw.resultX }
+        if ($null -ne $raw.resultY) { $state.resultY = [int]$raw.resultY }
         if ($raw.lastActionId) { $state.lastActionId = [string]$raw.lastActionId }
         if ($raw.toolbarX) { $state.toolbarX = [int]$raw.toolbarX }
         if ($raw.toolbarY) { $state.toolbarY = [int]$raw.toolbarY }
@@ -418,9 +419,13 @@ function On-HookEvent {
                     $rect = Get-ToolbarRect
                     if (-not (Test-PointInRect $e.X $e.Y $rect)) { if ($script:UiHooks.OnCloseToolbar) { & $script:UiHooks.OnCloseToolbar } }
                 }
-                if ((Get-ResultVisible) -and $script:Cfg.result.autoClose -and -not (Get-ResultPinned)) {
-                    $rect = Get-ResultRect
-                    if (-not (Test-PointInRect $e.X $e.Y $rect)) { Close-ResultNow }
+                if ($script:Cfg.result.autoClose) {
+                    foreach ($ctx in @($script:UI.Results)) {
+                        if ($null -eq $ctx -or $ctx.Pinned) { continue }
+                        if (-not (Test-ResultContextVisible $ctx)) { continue }
+                        $rect = Get-ResultRect -Context $ctx
+                        if (-not (Test-PointInRect $e.X $e.Y $rect)) { Close-ResultNow -Context $ctx }
+                    }
                 }
                 return
             }
@@ -442,7 +447,10 @@ function On-HookEvent {
         if ($e.Kind -eq 'key') {
             $vk = [int]$e.Vk
             if ($vk -eq 0x1B -and $e.Phase -eq 'down') {
-                if ($script:UiHooks.OnCloseResult) { if (Get-ResultVisible) { & $script:UiHooks.OnCloseResult } }
+                $target = Get-FocusedResultContext
+                if (-not $target -or -not (Test-ResultContextVisible $target)) { $target = $script:UI.Result }
+                if (-not $target -or -not (Test-ResultContextVisible $target)) { $target = Get-LastVisibleResultContext }
+                if ($target) { Close-ResultNow -Context $target }
                 if (Get-ToolbarVisible) { if ($script:UiHooks.OnCloseToolbar) { & $script:UiHooks.OnCloseToolbar } }
                 $script:Ctrl.Cancelled = $true
                 return
@@ -560,134 +568,214 @@ function Invoke-Action {
 
 function Start-ResultStream {
     param($Action, [string]$Text)
+    $ctx = $null
     try {
-        Close-ResultNow
+        if ($null -eq $Action) { return }
+        # Capture the current window frame and pin state before closing anything.
+        $placement = Get-ResultPlacement
+        Close-UnpinnedResultWindows
         $label = Get-ActionLabel $Action
-        Show-ResultWindow -ActionLabel $label -ActionId ([string]$Action.id)
-        $script:UI.Result.App = $script:SelectionApp
-        Set-ResultLoading $true
-        Set-ResultStatus '连接宿主…'
-        $body = @{
-            requestId = [guid]::NewGuid().ToString()
-            actionId  = [string]$Action.id
-            text      = $Text
-            source    = @{ app = [string]$script:SelectionApp }
-            locale    = [string]$script:Cfg.locale
-        } | ConvertTo-Json -Compress -Depth 5
-        $stream = [SseStream]::new()
-        $stream.Start(($script:Cfg.endpoint + '/v1/action'), $script:Cfg.token, $body)
-        $script:Stream = $stream
-        $script:SelfTestState.MetaCount = 0
-        $script:SelfTestState.DeltaCount = 0
-        $script:SelfTestState.Done = $false
-        $script:SelfTestState.Error = ''
-        Set-ResultStatus '生成中…'
-        Write-Log 'info' ('动作 ' + $Action.id + ' 已发起请求 chars=' + $Text.Length + ' app=' + $script:SelectionApp)
+        $ctx = Show-ResultWindow -ActionLabel $label -ActionId ([string]$Action.id) -Placement $placement
+        if (-not $ctx) { return }
+        $ctx.App = [string]$script:SelectionApp
+        $ctx.SourceText = $Text
+        Start-ResultSse -Context $ctx -Action $Action -Text $Text
     } catch {
         Write-LogErrorSafe ('发起请求失败: ' + $_.Exception.Message)
         Write-Log 'debug' ('发起请求堆栈: ' + $_.ScriptStackTrace)
-        try { Set-ResultError ('无法连接宿主：' + $_.Exception.Message) } catch { }
+        if (-not $ctx) { $ctx = $script:UI.Result }
+        if ($ctx) {
+            try { $script:UI.Result = $ctx; Set-ResultError ('无法连接宿主：' + $_.Exception.Message) } catch { }
+        }
     }
+}
+
+function Close-UnpinnedResultWindows {
+    $contexts = @()
+    if ($script:UI.Results) { $contexts = @($script:UI.Results) }
+    foreach ($ctx in $contexts) {
+        if ($null -eq $ctx) { continue }
+        if ($ctx.Pinned) { continue }
+        Close-ResultNow -Context $ctx
+    }
+}
+
+function Reset-ResultForStream {
+    param($Context)
+    if ($null -eq $Context) { return }
+    $Context.Text = ''
+    $Context.Dirty = $false
+    $Context.HasDelta = $false
+    $Context.Done = $false
+    $Context.Error = ''
+    $Context.LoadingOn = $true
+    # Clear the old document now; a Dirty render here would hide the loading
+    # overlay before the first delta arrives.
+    try { if ($Context.RichBox -and $Context.RichBox.Document) { $Context.RichBox.Document.Blocks.Clear() } } catch { }
+    $Context.ModelLabel = ''
+    $Context.Provider = ''
+    $Context.Model = ''
+    if ($Context.ModelTag) {
+        $Context.ModelTag.Text = ''
+        $Context.ModelTag.Visibility = 'Collapsed'
+    }
+    if ($Context.StatusText -and $Context.Palette) {
+        try { $Context.StatusText.Foreground = Get-UiBrush $Context.Palette.Muted } catch { }
+    }
+    if ($Context.Loading) { $Context.Loading.Visibility = 'Visible' }
+}
+
+function Start-ResultSse {
+    param($Context, $Action, [string]$Text)
+    if ($null -eq $Context -or $null -eq $Action) { return }
+    $script:UI.Result = $Context
+    $Context.ActionId = [string]$Action.id
+    $Context.ActionLabel = Get-ActionLabel $Action
+    $Context.SourceText = $Text
+    if ($Context.TitleLabel) { $Context.TitleLabel.Text = [string]$Context.ActionLabel }
+    Reset-ResultForStream $Context
+    Set-ResultLoading $true
+    Set-ResultStatus '连接宿主…'
+    try { if ($Context.Stream) { $Context.Stream.Cancel() } } catch { }
+    $Context.Stream = $null
+    $body = @{
+        requestId = [guid]::NewGuid().ToString()
+        actionId  = [string]$Action.id
+        text      = $Text
+        source    = @{ app = [string]$Context.App }
+        locale    = [string]$script:Cfg.locale
+    } | ConvertTo-Json -Compress -Depth 5
+    $stream = [SseStream]::new()
+    $stream.Start(($script:Cfg.endpoint + '/v1/action'), $script:Cfg.token, $body)
+    $Context.Stream = $stream
+    Set-ResultStatus '生成中…'
+    Write-Log 'info' ('动作 ' + $Action.id + ' 已发起请求 chars=' + $Text.Length + ' app=' + $Context.App)
 }
 
 function Poll-Stream {
-    $s = $script:Stream
-    if (-not $s) { return }
-    if (-not (Get-ResultVisible)) {
-        try { $s.Cancel() } catch { }
-        $script:Stream = $null
-        return
-    }
-    $guard = 0
-    while ($guard -lt 120) {
-        $guard++
-        $ev = $s.Poll()
-        if ($null -eq $ev) { break }
+    $contexts = @()
+    if ($script:UI.Results) { $contexts = @($script:UI.Results) }
+    foreach ($ctx in $contexts) {
+        if ($null -eq $ctx) { continue }
+        $s = $ctx.Stream
+        if (-not $s) { continue }
+        if (-not (Test-ResultContextVisible $ctx)) {
+            try { $s.Cancel() } catch { }
+            $ctx.Stream = $null
+            continue
+        }
+        $previous = $script:UI.Result
+        $script:UI.Result = $ctx
         try {
-            switch ([string]$ev.Kind) {
-                'meta' {
-                    $script:SelfTestState.MetaCount++
-                    $data = $null
-                    try { $data = $ev.Data | ConvertFrom-Json } catch { }
-                    if ($data) {
-                        $prov = ''
-                        $model = ''
-                        $label = ''
-                        if ($data.PSObject.Properties['provider']) { $prov = [string]$data.provider }
-                        if ($data.PSObject.Properties['model']) { $model = [string]$data.model }
-                        if ($data.PSObject.Properties['label']) { $label = [string]$data.label }
-                        Set-ResultMeta -Provider $prov -Model $model -Label $label
+            $drained = $false
+            $guard = 0
+            while ($guard -lt 120) {
+                $guard++
+                $ev = $s.Poll()
+                if ($null -eq $ev) { $drained = $true; break }
+                try {
+                    switch ([string]$ev.Kind) {
+                        'meta' {
+                            $script:SelfTestState.MetaCount++
+                            $data = $null
+                            try { $data = $ev.Data | ConvertFrom-Json } catch { }
+                            if ($data) {
+                                $prov = ''
+                                $model = ''
+                                $label = ''
+                                if ($data.PSObject.Properties['provider']) { $prov = [string]$data.provider }
+                                if ($data.PSObject.Properties['model']) { $model = [string]$data.model }
+                                if ($data.PSObject.Properties['label']) { $label = [string]$data.label }
+                                Set-ResultMeta -Provider $prov -Model $model -Label $label
+                            }
+                            Set-ResultStatus '生成中…'
+                        }
+                        'delta' {
+                            $script:SelfTestState.DeltaCount++
+                            $data = $null
+                            try { $data = $ev.Data | ConvertFrom-Json } catch { }
+                            if ($data -and $data.PSObject.Properties['text']) { Add-ResultDelta ([string]$data.text) }
+                            Set-ResultStatus '生成中…'
+                        }
+                        'done' {
+                            $script:SelfTestState.Done = $true
+                            if (-not $script:SelfTestState.DoneAt) { $script:SelfTestState.DoneAt = [Environment]::TickCount64 }
+                            Set-ResultDone
+                            Write-Log 'info' 'SSE done'
+                        }
+                        'error' {
+                            $msg = '模型调用失败'
+                            $data = $null
+                            try { $data = $ev.Data | ConvertFrom-Json } catch { }
+                            if ($data -and $data.PSObject.Properties['message'] -and $data.message) { $msg = [string]$data.message }
+                            $script:SelfTestState.Error = $msg
+                            Set-ResultError ('出错：' + $msg)
+                            Write-Log 'warn' ('SSE error: ' + $msg)
+                        }
+                        'transport-error' {
+                            $msg = [string]$ev.Data
+                            if (-not $msg) { $msg = '连接失败' }
+                            $script:SelfTestState.Error = $msg
+                            Set-ResultError ('无法连接宿主：' + $msg)
+                            Write-Log 'warn' ('SSE transport error: ' + $msg)
+                        }
+                        'stream-end' {
+                            if (-not $ctx.Done -and -not $ctx.Error) {
+                                $msg = '连接已断开，请重试'
+                                $script:SelfTestState.Error = $msg
+                                Set-ResultError $msg
+                                Write-Log 'warn' 'SSE stream ended without done'
+                            }
+                        }
+                        default { }
                     }
-                    Set-ResultStatus '生成中…'
+                } catch {
+                    Write-LogErrorSafe ('SSE 事件处理失败: ' + $_.Exception.Message)
                 }
-                'delta' {
-                    $script:SelfTestState.DeltaCount++
-                    $data = $null
-                    try { $data = $ev.Data | ConvertFrom-Json } catch { }
-                    if ($data -and $data.PSObject.Properties['text']) { Add-ResultDelta ([string]$data.text) }
-                    Set-ResultStatus '生成中…'
-                }
-                'done' {
-                    $script:SelfTestState.Done = $true
-                    if (-not $script:SelfTestState.DoneAt) { $script:SelfTestState.DoneAt = [Environment]::TickCount64 }
-                    Set-ResultDone
-                    Write-Log 'info' 'SSE done'
-                }
-                'error' {
-                    $msg = '模型调用失败'
-                    $data = $null
-                    try { $data = $ev.Data | ConvertFrom-Json } catch { }
-                    if ($data -and $data.PSObject.Properties['message'] -and $data.message) { $msg = [string]$data.message }
-                    $script:SelfTestState.Error = $msg
-                    Set-ResultError ('出错：' + $msg)
-                    Write-Log 'warn' ('SSE error: ' + $msg)
-                }
-                'transport-error' {
-                    $msg = [string]$ev.Data
-                    if (-not $msg) { $msg = '连接失败' }
-                    $script:SelfTestState.Error = $msg
-                    Set-ResultError ('无法连接宿主：' + $msg)
-                    Write-Log 'warn' ('SSE transport error: ' + $msg)
-                }
-                'stream-end' {
-                    if (-not $script:SelfTestState.Done -and -not $script:UI.Result.Error) {
-                        $msg = '连接已断开，请重试'
-                        $script:SelfTestState.Error = $msg
-                        Set-ResultError $msg
-                        Write-Log 'warn' 'SSE stream ended without done'
-                    }
-                }
-                default { }
             }
-        } catch {
-            Write-LogErrorSafe ('SSE 事件处理失败: ' + $_.Exception.Message)
+            if ($s.Finished -and $drained) { $ctx.Stream = $null }
+        } finally {
+            $script:UI.Result = $previous
         }
     }
-    if ($s.Finished -and -not (Get-ResultVisible)) { $script:Stream = $null }
 }
 
 function Close-ResultNow {
-    try { if ($script:Stream) { $script:Stream.Cancel() } } catch { }
-    $script:Stream = $null
-    $script:SuppressAutoClose = $false
-    Close-ResultWindow
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if ($null -eq $Context) { $script:SuppressAutoClose = $false; return }
+    try { if ($Context.Stream) { $Context.Stream.Cancel() } } catch { }
+    $Context.Stream = $null
+    if ($script:UI.Result -eq $Context) { $script:SuppressAutoClose = $false }
+    Close-ResultWindow -Context $Context
 }
 
 function Copy-ResultText {
-    $text = Get-ResultText
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if ($null -eq $Context) { return }
+    $script:UI.Result = $Context
+    $text = Get-ResultText -Context $Context
     if ([string]::IsNullOrEmpty($text)) { return }
     $ok = [ClipboardUtil]::SetText($text)
     Set-ResultStatus $(if ($ok) { '已复制' } else { '复制失败' })
 }
 
 function Regenerate-Result {
-    if (-not $script:UI.Result) { return }
-    $actionId = [string]$script:UI.Result.ActionId
+    param($Context = $null)
+    if ($null -eq $Context) { $Context = $script:UI.Result }
+    if ($null -eq $Context) { return }
+    if (-not (Test-ResultContextVisible $Context)) { return }
+    $actionId = [string]$Context.ActionId
     $act = Find-Action $actionId
-    if (-not $act) { return }
-    $text = [string]$script:SelectionText
+    if (-not $act) { Write-Log 'warn' ('无法重新生成：未知动作 ' + $actionId); return }
+    $text = [string]$Context.SourceText
+    if ([string]::IsNullOrEmpty($text)) { $text = [string]$script:SelectionText }
     if ([string]::IsNullOrEmpty($text)) { return }
-    Start-ResultStream -Action $act -Text $text
+    $script:UI.Result = $Context
+    # Restart the stream inside the same window: position, size and pin survive.
+    Start-ResultSse -Context $Context -Action $act -Text $text
+    Write-Log 'info' ('重新生成 ' + $actionId + '，沿用原窗口位置与尺寸')
 }
 
 # ---------------------------------------------------------------------------
@@ -698,7 +786,7 @@ function Invoke-Preview {
     param([string]$Text)
     try {
         if ([string]::IsNullOrWhiteSpace($Text)) { $Text = $script:SampleText }
-        Close-ResultNow
+        Close-AllResultWindows
         Close-ToolbarWindow
         $script:SelectionText = $Text
         $script:SelectionApp = 'preview'
@@ -766,24 +854,32 @@ function Poll-PreviewStream {
 # ---------------------------------------------------------------------------
 
 $script:SelfTestState = @{
-    Enabled     = $false
-    Step        = 0
-    StepAt      = 0
-    StartedAt   = 0
-    MetaCount   = 0
-    DeltaCount  = 0
-    Done        = $false
-    Clicked     = $false
-    PinToggled  = $false
-    Error       = ''
-    ToolbarShot = ''
-    ResultShot  = ''
-    ToolbarRect = @()
-    ResultRect  = @()
-    Ok          = $false
-    DoneAt      = 0
-    TimeoutMs   = 20000
+    Enabled         = $false
+    Step            = 0
+    StepAt          = 0
+    StartedAt       = 0
+    MetaCount       = 0
+    DeltaCount      = 0
+    Done            = $false
+    Clicked         = $false
+    PinToggled      = $false
+    StackOk         = $false
+    StackOffsetX    = 0
+    StackOffsetY    = 0
+    StackSameSize   = $false
+    OldVisible      = $false
+    StackFirstRect  = @()
+    StackSecondRect = @()
+    Error           = ''
+    ToolbarShot     = ''
+    ResultShot      = ''
+    ToolbarRect     = @()
+    ResultRect      = @()
+    Ok              = $false
+    DoneAt          = 0
+    TimeoutMs       = 20000
 }
+
 
 function Get-PreviewDir {
     $dir = Join-Path $script:Here 'preview'
@@ -794,33 +890,41 @@ function Get-PreviewDir {
 function Save-SelfTestResult {
     try {
         $script:SelfTestState.Ok = ($script:SelfTestState.Done -and $script:SelfTestState.Clicked -and
-            $script:SelfTestState.PinToggled -and
+            $script:SelfTestState.PinToggled -and $script:SelfTestState.StackOk -and
             $script:SelfTestState.DeltaCount -ge 1 -and $script:SelfTestState.MetaCount -ge 1 -and
             [string]::IsNullOrEmpty($script:SelfTestState.Error) -and
             (Test-Path -LiteralPath $script:SelfTestState.ToolbarShot) -and (Test-Path -LiteralPath $script:SelfTestState.ResultShot))
         $result = @{
-            ok          = $script:SelfTestState.Ok
-            done        = $script:SelfTestState.Done
-            clicked     = $script:SelfTestState.Clicked
-            pinToggled  = $script:SelfTestState.PinToggled
-            metaCount   = $script:SelfTestState.MetaCount
-            deltaCount  = $script:SelfTestState.DeltaCount
-            error       = $script:SelfTestState.Error
-            toolbarShot = $script:SelfTestState.ToolbarShot
-            resultShot  = $script:SelfTestState.ResultShot
-            toolbarRect = $script:SelfTestState.ToolbarRect
-            resultRect  = $script:SelfTestState.ResultRect
-            durationMs  = [Environment]::TickCount64 - $script:SelfTestState.StartedAt
-            pid         = $PID
+            ok              = $script:SelfTestState.Ok
+            done            = $script:SelfTestState.Done
+            clicked         = $script:SelfTestState.Clicked
+            pinToggled      = $script:SelfTestState.PinToggled
+            stackOk         = $script:SelfTestState.StackOk
+            stackOffsetX    = $script:SelfTestState.StackOffsetX
+            stackOffsetY    = $script:SelfTestState.StackOffsetY
+            stackSameSize   = $script:SelfTestState.StackSameSize
+            oldVisible      = $script:SelfTestState.OldVisible
+            stackFirstRect  = $script:SelfTestState.StackFirstRect
+            stackSecondRect = $script:SelfTestState.StackSecondRect
+            metaCount       = $script:SelfTestState.MetaCount
+            deltaCount      = $script:SelfTestState.DeltaCount
+            error           = $script:SelfTestState.Error
+            toolbarShot     = $script:SelfTestState.ToolbarShot
+            resultShot      = $script:SelfTestState.ResultShot
+            toolbarRect     = $script:SelfTestState.ToolbarRect
+            resultRect      = $script:SelfTestState.ResultRect
+            durationMs      = [Environment]::TickCount64 - $script:SelfTestState.StartedAt
+            pid             = $PID
         }
         $path = Join-Path $script:Cfg.dataDir 'selftest-result.json'
         if (-not (Test-Path -LiteralPath $script:Cfg.dataDir)) { New-Item -ItemType Directory -Force -Path $script:Cfg.dataDir | Out-Null }
         [System.IO.File]::WriteAllText($path, ($result | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
-        Write-Log 'info' ('自测结果: ok=' + $script:SelfTestState.Ok + ' clicked=' + $script:SelfTestState.Clicked + ' pinToggled=' + $script:SelfTestState.PinToggled + ' metas=' + $script:SelfTestState.MetaCount + ' deltas=' + $script:SelfTestState.DeltaCount + ' done=' + $script:SelfTestState.Done)
+        Write-Log 'info' ('自测结果: ok=' + $script:SelfTestState.Ok + ' clicked=' + $script:SelfTestState.Clicked + ' pinToggled=' + $script:SelfTestState.PinToggled + ' stackOk=' + $script:SelfTestState.StackOk + ' metas=' + $script:SelfTestState.MetaCount + ' deltas=' + $script:SelfTestState.DeltaCount + ' done=' + $script:SelfTestState.Done)
     } catch {
         Write-Log 'error' ('写自测结果失败: ' + $_.Exception.Message)
     }
 }
+
 
 function Invoke-SelfTestTick {
     $st = $script:SelfTestState
@@ -896,6 +1000,13 @@ function Invoke-SelfTestTick {
                     }
                     $st.PinToggled = $true
                     Write-Log 'info' '自测 pin 按钮点击两次：钉住/取消钉住与 Topmost 校验通过'
+                    # Pin the first result window once more, so the next
+                    # action opens a second window stacked at (-24, +24).
+                    $pinArgs3 = [System.Windows.Input.MouseButtonEventArgs]::new([System.Windows.Input.Mouse]::PrimaryDevice, [Environment]::TickCount, [System.Windows.Input.MouseButton]::Left)
+                    $pinArgs3.RoutedEvent = [System.Windows.UIElement]::MouseLeftButtonUpEvent
+                    $pinBtn.RaiseEvent($pinArgs3)
+                    if (-not (Get-ResultPinned)) { throw [System.InvalidOperationException]::new('第三个 pin 点击后结果窗未处于钉住状态') }
+                    Write-Log 'info' '自测再次钉住首个结果窗，准备多窗口断言'
                     $st.Step = 3
                     $st.StepAt = $now
                 }
@@ -918,10 +1029,66 @@ function Invoke-SelfTestTick {
                 }
             }
             4 {
+                if ($now - $st.StepAt -ge 250) {
+                    $first = $script:UI.Result
+                    if (-not $first) { throw [System.InvalidOperationException]::new('多窗口断言：找不到首个结果窗') }
+                    if (-not $first.Pinned) { throw [System.InvalidOperationException]::new('多窗口断言：首个结果窗未钉住') }
+                    # Move the pinned window to a safe spot so the -24/+24 offset
+                    # cannot be altered by work-area clamping.
+                    $work = [ScreenUtil]::GetWorkArea(0, 0)
+                    if ($first.Hwnd -ne [IntPtr]::Zero) {
+                        $baseRect = [ForegroundInfo]::GetWindowRect($first.Hwnd)
+                        if ($baseRect -and $baseRect.Count -ge 4) { $work = [ScreenUtil]::GetWorkArea([int]$baseRect[0] + 10, [int]$baseRect[1] + 10) }
+                    }
+                    [WindowUtil]::MoveWindow($first.Hwnd, ([int]$work[0] + 40), ([int]$work[1] + 8), [bool]$first.Window.Topmost)
+                    $actionBtn = Get-ToolbarActionButton -ActionId 'translate'
+                    if (-not $actionBtn) { throw [System.InvalidOperationException]::new('多窗口断言：工具栏中找不到 translate 按钮') }
+                    $stackArgs = [System.Windows.Input.MouseButtonEventArgs]::new([System.Windows.Input.Mouse]::PrimaryDevice, [Environment]::TickCount, [System.Windows.Input.MouseButton]::Left)
+                    $stackArgs.RoutedEvent = [System.Windows.UIElement]::MouseLeftButtonUpEvent
+                    $actionBtn.RaiseEvent($stackArgs)
+                    $second = $script:UI.Result
+                    if (-not $second -or [object]::ReferenceEquals($second, $first)) {
+                        throw [System.InvalidOperationException]::new('多窗口断言：第二次动作没有创建新的结果窗')
+                    }
+                    $st.OldVisible = (Test-ResultContextVisible $first)
+                    if (-not $st.OldVisible) { throw [System.InvalidOperationException]::new('多窗口断言：钉住的首个结果窗被关闭') }
+                    if (-not (Test-ResultContextVisible $second)) { throw [System.InvalidOperationException]::new('多窗口断言：第二个结果窗未显示') }
+                    $firstW = [double]$first.Window.Width - 24
+                    $firstH = [double]$first.Window.Height - 24
+                    $secondW = [double]$second.Window.Width - 24
+                    $secondH = [double]$second.Window.Height - 24
+                    $st.StackSameSize = ([Math]::Abs($firstW - $secondW) -lt 0.5 -and [Math]::Abs($firstH - $secondH) -lt 0.5)
+                    $firstRect = Get-ResultRect -Context $first
+                    $secondRect = Get-ResultRect -Context $second
+                    if (-not $firstRect -or -not $secondRect) { throw [System.InvalidOperationException]::new('多窗口断言：结果窗矩形为空') }
+                    $st.StackOffsetX = [int]$secondRect[0] - [int]$firstRect[0]
+                    $st.StackOffsetY = [int]$secondRect[1] - [int]$firstRect[1]
+                    $st.StackFirstRect = $firstRect
+                    $st.StackSecondRect = $secondRect
+                    $st.StackOk = ($st.StackSameSize -and $st.StackOffsetX -eq -24 -and $st.StackOffsetY -eq 24)
+                    if (-not $st.StackOk) {
+                        throw [System.InvalidOperationException]::new('多窗口断言失败: sameSize=' + $st.StackSameSize + ' dx=' + $st.StackOffsetX + ' dy=' + $st.StackOffsetY)
+                    }
+                    Write-Log 'info' ('自测多窗口：旧窗仍可见，新窗同尺寸，原点偏移 ' + $st.StackOffsetX + ',' + $st.StackOffsetY)
+                    $st.Step = 5
+                    $st.StepAt = $now
+                }
+            }
+            5 {
+                $current = $script:UI.Result
+                $currentDone = [bool]($current -and $current.Done)
+                $timedOut = ($now - $st.StepAt) -gt 8000
+                if ($currentDone -or $timedOut) {
+                    if (-not $currentDone) { $st.Error = '多窗口断言：第二个结果流未在 8 秒内收到 done' }
+                    Save-SelfTestResult
+                    $st.Step = 6
+                    $st.StepAt = $now
+                }
+            }
+            6 {
                 if ($now - $st.StepAt -ge 300) {
                     Close-AllUi
-                    try { if ($script:Stream) { $script:Stream.Cancel(); $script:Stream = $null } } catch { }
-                    $st.Step = 5
+                    $st.Step = 7
                     Stop-Helper 'selftest 完成'
                 }
             }
@@ -990,7 +1157,6 @@ function Stop-Helper {
     $script:ShuttingDown = $true
     Write-Log 'info' ('助手退出: ' + $Reason)
     try { Close-AllUi } catch { }
-    try { if ($script:Stream) { $script:Stream.Cancel() } } catch { }
     try { if ($script:HooksInstalled) { [SelectionHook]::Uninstall(); $script:HooksInstalled = $false } } catch { }
     try { Save-State } catch { }
     try { $script:App.Shutdown() } catch { }
@@ -1141,19 +1307,30 @@ function Wire-UiHooks {
         Close-ToolbarWindow
     }
     $script:UiHooks.OnCopyResult = {
-        Copy-ResultText
+        param($ctx)
+        Copy-ResultText -Context $ctx
     }
     $script:UiHooks.OnRegenerate = {
-        Regenerate-Result
+        param($ctx)
+        Regenerate-Result -Context $ctx
     }
     $script:UiHooks.OnCloseResult = {
-        Close-ResultNow
+        param($ctx)
+        Close-ResultNow -Context $ctx
     }
     $script:UiHooks.OnSaveResultSize = {
         param($width, $height)
         try {
             $script:State.resultWidth = [Math]::Round([double]$width - 24)
             $script:State.resultHeight = [Math]::Round([double]$height - 24)
+            Save-State
+        } catch { }
+    }
+    $script:UiHooks.OnSaveResultPosition = {
+        param($x, $y)
+        try {
+            $script:State.resultX = [int]$x
+            $script:State.resultY = [int]$y
             Save-State
         } catch { }
     }
@@ -1166,6 +1343,7 @@ function Wire-UiHooks {
         } catch { }
     }
 }
+
 
 # ---------------------------------------------------------------------------
 # Entry

@@ -8,6 +8,32 @@ struct LaunchOptions {
     var noPermissionPrompt = false
 }
 
+struct LocalPreviewStream {
+    var characters: [Character]
+    var position: Int
+    var nextTick: TimeInterval
+}
+
+/// One result window plus its own stream state. Pinned windows stay alive while
+/// newer result windows open; each session is closed and regenerated separately.
+final class ResultSession {
+    let window: ResultWindow
+    let action: ActionConfig
+    let text: String
+    let app: String
+    var sse: SSEStream?
+    var localStream: LocalPreviewStream?
+
+    init(window: ResultWindow, action: ActionConfig, text: String, app: String) {
+        self.window = window
+        self.action = action
+        self.text = text
+        self.app = app
+    }
+
+    var isPinned: Bool { window.isPinned }
+}
+
 final class AppController {
     // MARK: Configuration and shared services
 
@@ -41,20 +67,15 @@ final class AppController {
         """
     }()
 
-    // MARK: UI
+    // MARK: UI and sessions
 
     var toolbar: ToolbarWindow?
-    var result: ResultWindow?
     var toast: Toast?
-    var sse: SSEStream?
-    var localStream: LocalPreviewStream?
+    var sessions: [ResultSession] = []
+    private(set) var activeSession: ResultSession?
     var selftestRunner: SelfTestRunner?
 
-    struct LocalPreviewStream {
-        var characters: [Character]
-        var position: Int
-        var nextTick: TimeInterval
-    }
+    var result: ResultWindow? { activeSession?.window }
 
     // MARK: Trigger state
 
@@ -71,9 +92,6 @@ final class AppController {
     private var ctrlCancelled = true
     private var pendingSelectionTriggerAt: TimeInterval = 0
     private var capturing = false
-    private var suppressAutoClose = false
-    private var resultSourceText = ""
-    private var lastAction: ActionConfig?
     private var shortcutSpec: ShortcutSpec
 
     // MARK: Runtime state
@@ -113,7 +131,6 @@ final class AppController {
         startPump()
 
         if isSelftest {
-            suppressAutoClose = true
             if config.trigger.mode == .shortcut && !shortcutSpec.isUsable {
                 logger.warn("无法解析快捷键: \(config.trigger.shortcut)")
             }
@@ -186,9 +203,13 @@ final class AppController {
             }
         }
 
-        tickLocalPreview(current)
-        result?.renderIfNeeded()
-        result?.animateLoading()
+        for session in sessions {
+            tickLocalPreview(for: session, now: current)
+        }
+        for session in sessions {
+            session.window.renderIfNeeded()
+            session.window.animateLoading()
+        }
         toast?.tick(current)
         tickPreviewScreenshots(current)
         selftestRunner?.tick(current)
@@ -205,9 +226,6 @@ final class AppController {
         pumpTimer?.invalidate()
         pumpTimer = nil
         closeAllUI()
-        sse?.cancel()
-        sse = nil
-        localStream = nil
         if !isSelftest {
             monitor.uninstall()
         }
@@ -218,10 +236,107 @@ final class AppController {
 
     func closeAllUI() {
         closeToolbar()
-        closeResult()
+        closeAllSessions()
         toast?.close()
         toast = nil
         TooltipPresenter.shared.hide()
+    }
+
+    // MARK: Sessions and geometry
+
+    private func activate(_ session: ResultSession?) {
+        guard let session,
+              sessions.contains(where: { $0 === session }),
+              session.window.isVisible else { return }
+        activeSession = session
+    }
+
+    private func currentVisibleSession() -> ResultSession? {
+        if let active = activeSession, active.window.isVisible {
+            return active
+        }
+        return sessions.reversed().first { $0.window.isVisible && $0.window.isPinned }
+    }
+
+    private struct ResultPlacement {
+        var contentSize: NSSize
+        var preferredOrigin: NSPoint?
+    }
+
+    /// Computed before any window is closed: the geometry of the current window
+    /// (or the saved geometry when none is visible) decides the next placement.
+    private func computeResultPlacement() -> ResultPlacement {
+        if let current = currentVisibleSession() {
+            let frame = current.window.frame
+            let size = current.window.contentSize
+            if current.window.isPinned {
+                let desired = NSPoint(x: frame.origin.x - 24, y: frame.origin.y - 24)
+                let screen = ScreenGeometry.screen(containing: desired)
+                let clamped = ScreenGeometry.clamp(
+                    rect: NSRect(origin: desired, size: frame.size),
+                    into: screen.visibleFrame
+                )
+                return ResultPlacement(contentSize: size, preferredOrigin: clamped.origin)
+            }
+            return ResultPlacement(contentSize: size, preferredOrigin: frame.origin)
+        }
+
+        let size = initialResultContentSize()
+        if let saved = state.rememberedResultOrigin {
+            let desired = NSPoint(x: saved.x, y: saved.y)
+            let screen = ScreenGeometry.screen(containing: desired)
+            let clamped = ScreenGeometry.clamp(
+                rect: NSRect(origin: desired, size: NSSize(width: size.width + 24, height: size.height + 24)),
+                into: screen.visibleFrame
+            )
+            return ResultPlacement(contentSize: size, preferredOrigin: clamped.origin)
+        }
+        return ResultPlacement(contentSize: size, preferredOrigin: nil)
+    }
+
+    private func closeUnpinnedSessions() {
+        for session in Array(sessions) where !session.window.isPinned {
+            closeSession(session)
+        }
+    }
+
+    func closeSession(_ session: ResultSession) {
+        guard let index = sessions.firstIndex(where: { $0 === session }) else { return }
+        logger.debug("关闭结果窗 action=\(session.action.id) pinned=\(session.window.isPinned) remaining=\(sessions.count - 1)")
+        session.sse?.cancel()
+        session.sse = nil
+        session.localStream = nil
+        sessions.remove(at: index)
+        session.window.suppressAutoClose = true
+        session.window.close()
+        if activeSession === session {
+            activeSession = sessions.reversed().first { $0.window.isVisible }
+            previewResultShotAt = nil
+        }
+    }
+
+    func closeAllSessions() {
+        let current = sessions
+        sessions.removeAll()
+        activeSession = nil
+        previewResultShotAt = nil
+        for session in current {
+            session.sse?.cancel()
+            session.sse = nil
+            session.localStream = nil
+            session.window.suppressAutoClose = true
+            session.window.close()
+        }
+    }
+
+    func initialResultContentSize() -> NSSize {
+        var width = config.result.width
+        var height = config.result.height
+        if config.result.rememberSize, let remembered = state.rememberedResultSize {
+            width = remembered.width
+            height = remembered.height
+        }
+        return NSSize(width: min(max(width, 300), 900), height: min(max(height, 200), 900))
     }
 
     // MARK: Event handling
@@ -233,10 +348,12 @@ final class AppController {
             pendingSelectionTriggerAt = 0
             selectionCandidate = nil
             let point = ScreenGeometry.appKitPoint(fromCG: event.point)
-            if let resultWindow = result, resultWindow.isVisible,
-               config.result.autoClose, !resultWindow.isPinned,
-               !resultWindow.contains(screenPoint: point) {
-                closeResult()
+            if config.result.autoClose {
+                for session in Array(sessions) where session.window.isVisible
+                    && !session.window.isPinned
+                    && !session.window.contains(screenPoint: point) {
+                    closeSession(session)
+                }
             }
             if let toolbarWindow = toolbar, toolbarWindow.visible {
                 if toolbarWindow.isOverflowOpen {
@@ -261,7 +378,9 @@ final class AppController {
                 if let toolbarWindow = toolbar, toolbarWindow.isOverflowOpen {
                     toolbarWindow.closeOverflow()
                 }
-                if result?.isVisible == true { closeResult() }
+                if let active = activeSession, active.window.isVisible {
+                    closeSession(active)
+                }
                 if toolbar?.visible == true { closeToolbar() }
                 ctrlCancelled = true
                 return
@@ -358,8 +477,6 @@ final class AppController {
     }
 
     private func captureSelectedText() -> String {
-        suppressAutoClose = true
-        defer { suppressAutoClose = false }
         let snapshot = clipboard.save()
         if !snapshot.saved {
             logger.warn("剪贴板不可读，取消本次取词")
@@ -423,8 +540,6 @@ final class AppController {
             return
         }
         state.setLastActionId(actionId)
-        lastAction = action
-        resultSourceText = selectionText
         if !isSelftest { closeToolbar() }
 
         switch action.kind {
@@ -467,145 +582,189 @@ final class AppController {
 
     // MARK: Result window and streaming
 
-    func initialResultContentSize() -> NSSize {
-        var width = config.result.width
-        var height = config.result.height
-        if config.result.rememberSize, let remembered = state.rememberedResultSize {
-            width = remembered.width
-            height = remembered.height
+    private func configureCallbacks(for session: ResultSession) {
+        session.window.onClose = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.closeSession(session)
         }
-        return NSSize(width: min(max(width, 300), 900), height: min(max(height, 200), 900))
+        session.window.onCopy = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.activeSession = session
+            _ = session.window.copyResultText()
+        }
+        session.window.onRegenerate = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.regenerate(session)
+        }
+        session.window.onResizeEnd = { [weak self] newSize in
+            self?.state.setResultSize(width: Double(newSize.width), height: Double(newSize.height))
+        }
+        session.window.onMoved = { [weak self] origin in
+            self?.state.setResultOrigin(x: Double(origin.x), y: Double(origin.y))
+        }
+        session.window.onActivate = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.activate(session)
+        }
     }
 
     func startResultStream(action: ActionConfig, text: String, useLocal: Bool = false) {
-        closeResult()
-        let size = initialResultContentSize()
+        let placement = computeResultPlacement()
+        closeUnpinnedSessions()
+
         let window = ResultWindow(
             config: config,
             palette: Theme.current,
             actionLabel: action.label,
             actionId: action.id,
-            contentSize: size
+            contentSize: placement.contentSize
         )
-        window.onClose = { [weak self] in self?.closeResult() }
-        window.onCopy = { [weak self] in _ = self?.result?.copyResultText() }
-        window.onRegenerate = { [weak self] in self?.regenerate() }
-        window.onResizeEnd = { [weak self] newSize in
-            self?.state.setResultSize(width: Double(newSize.width), height: Double(newSize.height))
-        }
+        let session = ResultSession(window: window, action: action, text: text, app: selectionApp)
+        configureCallbacks(for: session)
         window.suppressAutoClose = isSelftest
-        result = window
-        lastAction = action
-        resultSourceText = text
-        suppressAutoClose = isSelftest
+        sessions.append(session)
+        activeSession = session
 
         let toolbarFrame = (toolbar?.visible == true) ? toolbar?.frame : nil
-        window.show(relativeToToolbar: toolbarFrame, cursorPoint: NSEvent.mouseLocation)
+        window.show(
+            relativeToToolbar: toolbarFrame,
+            cursorPoint: NSEvent.mouseLocation,
+            preferredOrigin: placement.preferredOrigin
+        )
+        logger.debug("结果窗已创建 action=\(action.id) origin=\(window.frame.origin) size=\(window.contentSize)")
         window.setLoading(true)
         window.setStatus(strings.connectingHost)
 
         if useLocal || isSelftest || config.endpoint.isEmpty || config.token.isEmpty {
-            startLocalPreviewStream()
+            startLocalPreviewStream(for: session)
         } else {
-            startSSE(action: action, text: text)
+            startSSE(for: session)
             window.setStatus(strings.generatingStatus)
         }
     }
 
-    func closeResult() {
-        sse?.cancel()
-        sse = nil
-        localStream = nil
-        previewResultShotAt = nil
-        guard let window = result else { return }
-        result = nil
-        suppressAutoClose = false
-        window.suppressAutoClose = true
-        window.close()
+    private func regenerate(_ session: ResultSession) {
+        guard let index = sessions.firstIndex(where: { $0 === session }) else { return }
+        let action = session.action
+        let text = session.text
+        let app = session.app
+        let oldWindow = session.window
+        let frame = oldWindow.frame
+        let contentSize = oldWindow.contentSize
+        let pinned = oldWindow.isPinned
+
+        session.sse?.cancel()
+        session.sse = nil
+        session.localStream = nil
+        oldWindow.suppressAutoClose = true
+
+        let window = ResultWindow(
+            config: config,
+            palette: Theme.current,
+            actionLabel: action.label,
+            actionId: action.id,
+            contentSize: contentSize
+        )
+        let newSession = ResultSession(window: window, action: action, text: text, app: app)
+        configureCallbacks(for: newSession)
+        window.suppressAutoClose = isSelftest
+        if pinned { window.setPinned(true) }
+
+        sessions[index] = newSession
+        activeSession = newSession
+        oldWindow.close()
+
+        window.show(relativeToToolbar: nil, cursorPoint: nil, preferredOrigin: frame.origin)
+        window.setLoading(true)
+        window.setStatus(strings.connectingHost)
+        if isSelftest || config.endpoint.isEmpty || config.token.isEmpty {
+            startLocalPreviewStream(for: newSession)
+        } else {
+            startSSE(for: newSession)
+            window.setStatus(strings.generatingStatus)
+        }
     }
 
-    private func regenerate() {
-        guard let action = lastAction else { return }
-        var text = selectionText
-        if text.isEmpty { text = resultSourceText }
-        guard !text.isEmpty else { return }
-        startResultStream(action: action, text: text, useLocal: isSelftest)
+    private func startLocalPreviewStream(for session: ResultSession) {
+        session.localStream = LocalPreviewStream(
+            characters: Array(AppController.localPreviewMarkdown),
+            position: 0,
+            nextTick: 0
+        )
+        session.window.setStatus(strings.generatingStatus)
     }
 
-    private func startLocalPreviewStream() {
-        localStream = LocalPreviewStream(characters: Array(AppController.localPreviewMarkdown), position: 0, nextTick: 0)
-        result?.setStatus(strings.generatingStatus)
-    }
-
-    private func tickLocalPreview(_ current: TimeInterval) {
-        guard var stream = localStream else { return }
+    private func tickLocalPreview(for session: ResultSession, now current: TimeInterval) {
+        guard var stream = session.localStream else { return }
         if current < stream.nextTick { return }
         stream.nextTick = current + 0.09
         let remaining = stream.characters.count - stream.position
         if remaining <= 0 {
-            localStream = nil
-            result?.setDone()
-            previewStreamFinished()
+            session.localStream = nil
+            session.window.setDone()
+            if activeSession === session { previewStreamFinished() }
             return
         }
         let count = min(14, remaining)
         let text = String(stream.characters[stream.position..<(stream.position + count)])
         stream.position += count
-        result?.appendDelta(text)
+        session.window.appendDelta(text)
         if stream.position >= stream.characters.count {
-            localStream = nil
-            result?.setDone()
-            previewStreamFinished()
+            session.localStream = nil
+            session.window.setDone()
+            if activeSession === session { previewStreamFinished() }
         } else {
-            localStream = stream
+            session.localStream = stream
         }
     }
 
-    private func startSSE(action: ActionConfig, text: String) {
+    private func startSSE(for session: ResultSession) {
         let body: [String: Any] = [
             "requestId": UUID().uuidString,
-            "actionId": action.id,
-            "text": text,
-            "source": ["app": selectionApp],
+            "actionId": session.action.id,
+            "text": session.text,
+            "source": ["app": session.app],
             "locale": config.locale,
         ]
         let stream = SSEStream()
-        sse = stream
-        stream.onEvent = { [weak self, weak stream] kind, data in
-            guard let self, let stream, self.sse === stream else { return }
-            self.handleSSEEvent(kind: kind, data: data)
+        session.sse = stream
+        stream.onEvent = { [weak self, weak session, weak stream] kind, data in
+            guard let self, let session, let stream, session.sse === stream else { return }
+            self.handleSSEEvent(kind: kind, data: data, session: session)
         }
         stream.start(urlString: config.endpoint + "/v1/action", token: config.token, body: body)
-        logger.info("动作 \(action.id) 已发起请求 chars=\(text.count) app=\(selectionApp)")
+        logger.info("动作 \(session.action.id) 已发起请求 chars=\(session.text.count) app=\(session.app)")
     }
 
-    private func handleSSEEvent(kind: String, data: String) {
+    private func handleSSEEvent(kind: String, data: String, session: ResultSession) {
+        guard sessions.contains(where: { $0 === session }) else { return }
+        let window = session.window
         let object = jsonObject(data)
         switch kind {
         case "meta":
             let provider = object?["provider"] as? String ?? ""
             let model = object?["model"] as? String ?? ""
             let label = object?["label"] as? String ?? ""
-            result?.applyMeta(provider: provider, model: model, label: label)
+            window.applyMeta(provider: provider, model: model, label: label)
         case "delta":
             if let text = object?["text"] as? String {
-                result?.appendDelta(text)
+                window.appendDelta(text)
             }
-            result?.setStatus(strings.generatingStatus)
+            window.setStatus(strings.generatingStatus)
         case "done":
-            result?.setDone()
-            logger.info("SSE done")
-            previewStreamFinished()
+            window.setDone()
+            logger.info("SSE done action=\(session.action.id)")
+            if activeSession === session { previewStreamFinished() }
         case "error":
             let message = (object?["message"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "模型调用失败"
-            result?.setError("出错：" + message)
+            window.setError("出错：" + message)
             logger.warn("SSE error message=\(Http.trim(message, 200))")
         case "transport-error":
             let message = data.isEmpty ? "连接失败" : data
-            result?.setError("无法连接宿主：" + message)
+            window.setError("无法连接宿主：" + message)
             logger.warn("SSE transport error: \(Http.trim(message, 200))")
         case "stream-end":
-            if let window = result, !window.isDone, window.errorText.isEmpty {
+            if !window.isDone, window.errorText.isEmpty {
                 window.setError("连接已断开，请重试")
             }
             logger.warn("SSE stream ended without done")
@@ -623,6 +782,7 @@ final class AppController {
     private func previewStreamFinished() {
         guard !isSelftest, options.screenshotDir != nil else { return }
         previewResultShotAt = now() + 0.9
+        logger.debug("预览结果截图已安排")
     }
 
     // MARK: command.json
@@ -660,7 +820,7 @@ final class AppController {
     private func invokePreview(text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let content = trimmed.isEmpty ? AppController.sampleSelectionText : text
-        closeResult()
+        closeAllSessions()
         closeToolbar()
         selectionText = content
         selectionApp = "preview"
@@ -714,7 +874,11 @@ final class AppController {
         }
         if let shotAt = previewResultShotAt, current >= shotAt {
             previewResultShotAt = nil
-            if let window = result, window.isVisible, let view = window.panel.contentView {
+            guard let window = result, window.isVisible else {
+                logger.warn("预览截图 result 跳过：没有可见的当前结果窗 remaining=\(sessions.count)")
+                return
+            }
+            if let view = window.panel.contentView {
                 let path = (directory as NSString).appendingPathComponent("result.png")
                 let capture = Screenshot.capture(view: view, to: path)
                 if capture.ok {
