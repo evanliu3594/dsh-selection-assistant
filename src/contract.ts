@@ -1,7 +1,7 @@
 /**
  * Shared contract between the Host half, the browser settings page and the
- * Windows helper process. Types only — no Node, no DOM imports, so both halves
- * can import this module.
+ * native helper processes (Windows PowerShell and macOS Swift). Types only —
+ * no Node, no DOM imports, so both halves can import this module.
  *
  * The Host half serializes these shapes for the helper and the settings page;
  * keep both ends in sync when a field changes.
@@ -21,6 +21,12 @@ export type ActionIcon = 'translate' | 'explain' | 'summarize' | 'search' | 'cop
 
 /** App filter posture. */
 export type AppFilterMode = 'off' | 'blacklist' | 'whitelist'
+
+/** Native helper runtime that serves this platform. */
+export type HelperKind = 'powershell' | 'swift' | 'none'
+
+/** macOS Accessibility permission as last reported by the helper. */
+export type AccessibilityPermission = 'granted' | 'denied' | 'unknown'
 
 /** One configurable toolbar action. */
 export interface ActionSettings {
@@ -83,7 +89,8 @@ export interface Settings {
   }
   actions: ActionSettings[]
   advanced: {
-    pwshPath: string
+    /** Explicit helper executable path; empty means auto-detect/build. */
+    helperPath: string
     logLevel: 'error' | 'warn' | 'info' | 'debug'
   }
 }
@@ -280,7 +287,7 @@ export function createDefaultSettings(): Settings {
         model: { provider: '', model: '' },
       },
     ],
-    advanced: { pwshPath: '', logLevel: 'info' },
+    advanced: { helperPath: '', logLevel: 'info' },
   }
 }
 
@@ -335,7 +342,17 @@ export interface ProviderOption {
 export interface StateDto {
   settings: Settings
   helper: HelperStatus
-  platform: { os: string; arch: string; pwsh: string; supported: boolean; reason: string }
+  platform: {
+    os: string
+    arch: string
+    /** Resolved helper executable (pwsh.exe on Windows, Swift binary on macOS). */
+    helper: string
+    helperKind: HelperKind
+    supported: boolean
+    reason: string
+    /** Accessibility permission means macOS only; unknown elsewhere. */
+    permissions: { accessibility: AccessibilityPermission }
+  }
   defaults: { provider: string; model: string; reasoningEffort: string }
   paths: { dataDir: string; log: string }
   version: string

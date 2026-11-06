@@ -9,12 +9,19 @@
 /.selftest/
 /lib/client.body.js
 node_modules/
+.tools/
 *.log
 /.probe-data/
 /.verify-data-*/
 /.verify-resolve-*/
+/.verify-macos-*/
+/.verify-host-macos-*/
 *.tmp
 .env
+
+# macOS helper build output (compiled by scripts/build-macos-helper.sh)
+/helper/macos/bin/
+/helper/macos/.build/
 
 # Selftest screenshots show the surrounding desktop; keep them local.
 /helper/preview/

@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.0 (2026-11-06)
+
+新增 macOS 支持。Windows 行为与 0.1.0 保持一致。
+
+### 新增
+
+- macOS 13.1 起新增原生助手（`helper/macos/Sources/`，Swift + AppKit）：全局事件 tap、拖选 + 长按 Control、选中即触发、快捷键、⌘C 剪贴板取词、应用名/Bundle ID 过滤、工具栏、溢出菜单、结果窗、流式 Markdown、pin、Toast、Esc/R/C。
+- macOS 助手打包为 `SelectionAssistant.app`，宿主用 LaunchServices 启动，使辅助功能授权归属于助手自己；未授权时助手保持运行并每 1.5 秒复查，授权后自动安装事件 tap。
+- macOS 宿主健康看门狗：助手每 2 秒检查宿主 `/v1/health`，宿主退出后约 6 秒内退出；宿主按 pid 停止旧实例。
+- 宿主首次启动自动运行 `scripts/build-macos-helper.sh` 编译助手（需要 Xcode Command Line Tools），源码更新后增量重编；支持 `--universal` 生成 arm64 + x86_64 通用 app。
+- 设置页按平台切换文案与提示：Windows 长按 Ctrl / macOS 长按 Control，应用过滤在 macOS 按应用名或 Bundle ID 匹配。
+- 设置页 macOS 权限卡：显示 granted / denied / unknown，denied 时提供「打开辅助功能设置」按钮。
+- 宿主新增 `platform.helperKind`、`platform.permissions.accessibility` 与 `POST /helper/open-permissions`。
+- 新增 `scripts/verify-macos-helper.mjs`、`scripts/verify-host-macos.mjs` 与 `scripts/build-macos-helper.sh`。
+- 文档与契约同步双端说明。
+
+### 变更
+
+- `Settings.advanced.pwshPath` 改名为 `helperPath`；旧 settings.json 在缺少新字段时自动迁移，之后只写新字段。
+- Row config 支持 `helperPath`，保留 `pwshPath` 作为旧配置回退。
+- `StateDto.platform` 由 `{ pwsh }` 扩展为 `{ helper, helperKind, supported, reason, permissions }`。
+
+### 验证
+
+- 宿主：`probe`、`verify-host`（设置迁移、平台分派、8 条设置路由、回环 SSE、鉴权、权限帧）PASS。
+- 浏览器：`verify-client-bundle` PASS。
+- macOS 构建：native arm64 PASS（624016 字节，13.1）；universal PASS（arm64 + x86_64，1231712 字节）。
+- macOS 助手自测：PASS；`ok/clicked/pinToggled/resizeOk/done` 全 true；工具栏与结果窗截图正常。
+- macOS 助手端到端：`verify-macos-helper` PASS（LaunchServices 启动、权限 error 帧、预览 SSE、截图、健康退出）。
+- macOS 宿主管线：`verify-host-macos` PASS（真实 HelperManager 自动构建、UserDefaults、预览动作、SIGTERM 回收）。
+- 权限归属实测：`open` 启动的 app 是 responsible pid、AX trust=false；直接 spawn 内层二进制时 responsible 是 DSH、trust=true。
+- 待人工验收：辅助功能授权后的真实拖选取词与 ⌘C、深色主题、溢出菜单视觉、多屏/混合 DPI、Intel 实机、设置页真实视觉、真实 DeepSeek 端到端。
+
+### 已知限制
+
+- macOS 需要 Xcode Command Line Tools；需要辅助功能授权；重新编译会改变 ad-hoc 签名，授权可能需要重新勾选。
+- 取词依赖剪贴板；个别应用可能不出词。
+- 未验证：macOS 从 App Store 沙箱应用取词、深色主题、溢出菜单视觉、混合 DPI 多屏、Intel 实机、真实辅助功能授权后的完整动作链路、真实 DeepSeek 端到端。
+
 ## 0.1.0 (2026-11-06)
 
 首个公开发布版本。

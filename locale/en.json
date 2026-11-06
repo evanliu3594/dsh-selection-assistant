@@ -1,11 +1,11 @@
 {
   "meta": {
     "title": "Selection assistant",
-    "description": "Select text in any Windows app, hold Ctrl, and run DeepSeek actions from a floating toolbar."
+    "description": "Select text in any Windows or macOS app, hold Ctrl (Control on macOS), and run DeepSeek actions from a floating toolbar."
   },
   "section": "Selection assistant",
   "page": {
     "title": "Selection assistant",
-    "subtitle": "Select text in any app, hold Ctrl, and pick an action. The toolbar and result window float above every application."
+    "subtitle": "Select text in any app, hold Ctrl (Control on macOS), and pick an action. The toolbar and result window float above every application."
   }
 }

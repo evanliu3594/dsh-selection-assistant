@@ -2,9 +2,14 @@
 
 本文件定义三部分之间的全部接口。任何一方改动接口，先改本文件。
 
+支持两个平台，宿主与设置页共用，只有助手进程按平台实现：
+
 - **宿主半体**（`src/*.ts`，运行在 DSH Host 的 Node 子进程）：管设置、模型调用、helper 进程生命周期。
-- **助手进程**（`helper/**`，PowerShell 7 + WPF，独立进程）：全局钩子、选词、工具栏、结果窗。
+- **助手进程（Windows）**（`helper/SelectionAssistant.ps1` + `helper/lib/**`，PowerShell 7 + WPF）：全局钩子、选词、工具栏、结果窗。
+- **助手进程（macOS）**（`helper/macos/Sources/**`，Swift + AppKit，`swiftc` 编译）：全局事件 tap、选词、工具栏、结果窗。
 - **设置页**（`src/client/**`，浏览器半体）：DSH 设置里的「划词助手」页面。
+
+平台差异只在两处：助手启动命令与取词快捷键（Windows 用 Ctrl+C，macOS 用 ⌘C）。设置 JSON、回环 HTTP、SSE 与 UI 规格两端一致。
 
 数据流：
 
@@ -15,7 +20,9 @@ DSH 设置页 --同源 fetch /selection-assistant/*--> 宿主（设置 JSON + �
 
 ## 1. 路径与端口
 
-- 设置与日志数据目录：`<dataDir>`，默认 `%USERPROFILE%\.dsh\selection-assistant`。
+- 设置与日志数据目录：`<dataDir>`，默认：
+  - Windows：`%USERPROFILE%\.dsh\selection-assistant`
+  - macOS：`~/.dsh/selection-assistant`
   - `settings.json`：唯一的设置持久化文件（宿主写，浏览器通过路由改）。
   - `helper-config.json`：宿主每次启动 helper 前写入的只读运行配置。
   - `helper-state.json`：helper 自己写的状态（记住的结果窗尺寸等）。
@@ -67,7 +74,7 @@ interface Settings {
   }
   actions: ActionSettings[]
   advanced: {
-    pwshPath: string                           // '' = 自动探测
+    helperPath: string                         // '' = 自动探测（Windows）或首次启动编译（macOS）
     logLevel: 'error' | 'warn' | 'info' | 'debug'
   }
 }
@@ -103,6 +110,7 @@ interface ActionSettings {
 - 未知字段忽略；越界数值夹到范围内；`actions` 为空数组时拒绝保存（至少保留一个动作）。
 - 保存是**深合并**：客户端只需提交改动的字段；`actions` 若提交则整体替换。
 - 保存后立即重启 helper（宿主自己负责），不重启 Host、不重启插件。
+- `advanced.pwshPath` 是 0.1 的字段名。0.2 读取时若不存在 `helperPath` 才回退到旧字段，之后只写 `helperPath`。
 
 ## 3. 设置页 HTTP 契约（宿主 `webServer`，前缀 `/selection-assistant`）
 
@@ -126,13 +134,23 @@ interface ActionSettings {
       "lastError": "",
       "restarts": 0
     },
-    "platform": { "os": "win32", "arch": "x64", "pwsh": "C:\\...\\pwsh.exe", "supported": true, "reason": "" },
+    "platform": {
+      "os": "win32 | darwin",
+      "arch": "x64 | arm64",
+      "helper": "C:\\...\\pwsh.exe 或 /.../helper/macos/bin/SelectionAssistant",
+      "helperKind": "powershell | swift | none",
+      "supported": true,
+      "reason": "",
+      "permissions": { "accessibility": "granted | denied | unknown" }
+    },
     "defaults": { "provider": "deepseek-account", "model": "deepseek-flash", "reasoningEffort": "" },
     "paths": { "dataDir": "C:\\Users\\Evan\\.dsh\\selection-assistant", "log": "C:\\...\\helper.log" },
-    "version": "0.1.0"
+    "version": "0.2.0"
   }
 }
 ```
+
+`permissions.accessibility` 只在 macOS 有意义；Windows 恒为 `unknown`。权限状态由 helper 的 `/v1/status` 上报，宿主保存在内存里。
 
 ### POST `/selection-assistant/settings`
 
@@ -168,6 +186,12 @@ interface ActionSettings {
 ### POST `/selection-assistant/helper/restart`
 
 响应：`{ "ok": true, "state": { ... } }`
+
+### POST `/selection-assistant/helper/open-permissions`
+
+仅 macOS。打开「系统设置 → 隐私与安全性 → 辅助功能」。
+
+响应：`{ "ok": true }`；失败：`{ "ok": false, "error": { "code": "open-permissions-failed", "message": "..." } }`。
 
 ### POST `/selection-assistant/helper/preview`
 
@@ -209,7 +233,11 @@ data: {"reason":"stop"}
 
 ### POST `/v1/status`（helper → 宿主）
 
-`{ "state": "ready" | "error", "message": "" }`；宿主据此更新状态机。
+```json
+{ "state": "ready", "message": "", "permissions": { "accessibility": true } }
+```
+
+宿主据此更新状态机与 `platform.permissions.accessibility`。macOS helper 在辅助功能未授权时上报 `error` + `accessibility: false`，进程保持运行并每 1.5 秒复查；授权后安装事件 tap 并重新上报 `ready` + `accessibility: true`。Windows helper 可以省略 `permissions`。
 
 ### POST `/v1/log`（helper → 宿主）
 
@@ -224,10 +252,32 @@ data: {"reason":"stop"}
 宿主启动：
 
 ```
+# Windows
 <pwsh> -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <helper/SelectionAssistant.ps1> -ConfigPath <helper-config.json>
+
+# macOS（LaunchServices 启动 app，app 才是 TCC 负责进程）
+/usr/bin/defaults write com.evanliu3594.dsh-selection-assistant.helper HelperConfigPath -string <helper-config.json>
+/usr/bin/open -n -a <helper/macos/bin/SelectionAssistant.app>
 ```
 
-（`windowsHide: true`，无控制台窗口；stderr/stdout 由宿主收集到日志。）
+macOS 27 的 `open --args` 不把参数传给 app，因此配置路径走 UserDefaults 键 `HelperConfigPath`。helper 取配置的顺序：命令行 `--config` > UserDefaults `HelperConfigPath` > `~/.dsh/selection-assistant/helper-config.json`。开发/验证用的 `SuppressPermissionPrompt`（Bool）与 `ScreenshotDir`（String）也走 UserDefaults；直跑内层二进制时可用同名命令行参数覆盖。
+
+Windows 用 `windowsHide: true`，无控制台窗口；stderr/stdout 由宿主收集到日志。macOS app 首次启动时由宿主运行 `sh scripts/build-macos-helper.sh` 编译（需要 Xcode Command Line Tools），之后按源码修改时间增量重编。可用 `--universal` 生成 arm64 + x86_64 通用 app。
+
+macOS 的 stdin 不可用（app 由 LaunchServices 启动），因此宿主与助手的存活关系改为：
+
+- helper 每 2 秒 `GET /v1/health`（不带 token）；连续 3 次失败 → 退出。
+- helper 启动后尽早把 `pid` 写入 `helper-state.json`；宿主用 `SIGTERM` 停止它，2.5 秒后仍未退出则 `SIGKILL`。
+- 宿主启动新实例前先按 pid 停掉旧实例；helper 自己也做单实例保护。
+
+macOS helper 还接受只在开发/验证时使用的命令行参数（直跑内层二进制时）：
+
+```
+--selftest --config <helper-config.json> --screenshot-dir <dir>   # 不装 tap、不连宿主，渲染窗口并写 selftest-result.json
+--no-permission-prompt                                            # 不弹系统授权框，仍上报 error 并持续复查
+```
+
+通过 `open` 启动时改成 UserDefaults 键：`SuppressPermissionPrompt` 等价 `--no-permission-prompt`，`ScreenshotDir` 等价 `--screenshot-dir`。
 
 `helper-config.json`：
 
@@ -240,8 +290,8 @@ data: {"reason":"stop"}
   "logPath": "C:\\Users\\Evan\\.dsh\\selection-assistant\\helper.log",
   "locale": "zh",
   "trigger": { "mode": "ctrl", "longPressMs": 500, "shortcut": "Ctrl+Alt+Q", "captureDelayMs": 120 },
-  "toolbar": { "compact": false, "maxVisibleActions": 5, "scale": 1 },
-  "result": { "followToolbar": true, "rememberSize": true, "autoClose": true, "alwaysOnTop": true, "opacity": 0.96, "width": 440, "height": 320 },
+  "toolbar": { "compact": false, "maxVisibleActions": 6, "scale": 1 },
+  "result": { "followToolbar": true, "rememberSize": true, "autoClose": true, "alwaysOnTop": true, "opacity": 0.96, "width": 500, "height": 400 },
   "appFilter": { "mode": "off", "processes": [] },
   "actions": [
     { "id": "translate", "kind": "llm", "label": "翻译", "icon": "translate", "enabled": true, "order": 10, "searchUrl": "" }
@@ -262,25 +312,33 @@ helper 状态文件 `helper-state.json`（helper 写）：
 { "version": 1, "pid": 1234, "startedAt": 1730000000000, "resultWidth": 440, "resultHeight": 320, "lastActionId": "translate" }
 ```
 
-## 6. 触发语义（用户需求：选中文字后长按 Ctrl 出现划词助手）
+## 6. 触发语义（选中文字后长按触发键出现划词助手）
 
-- `ctrl` 模式（默认）：鼠标左键拖选（按下到抬起的位移 > 4px）后，用户按下并**按住** Ctrl；按住达到 `longPressMs` 且期间没有按其他键、没有按鼠标键、Ctrl 未松开 → 触发。
+- `ctrl` 模式（默认）：鼠标左键拖选（按下到抬起的位移 > 4px）后，用户按下并**按住**触发键；按住达到 `longPressMs` 且期间没有按其他键、没有按鼠标键、触发键未松开 → 触发。
+  - Windows 触发键为 Ctrl。
+  - macOS 触发键为 Control（⌃），与 Windows 的 Ctrl 语义一致。
 - `selection` 模式：鼠标拖选抬起后 `captureDelayMs` 毫秒 → 直接触发（避免误触发时可切回 `ctrl`）。
-- `shortcut` 模式：任何一次拖选后，按下配置的快捷键（默认 `Ctrl+Alt+Q`）→ 触发。
-- 触发后依次：记录前台进程（用于应用过滤）→ 保存剪贴板 → 模拟 Ctrl+C → 等待 `captureDelayMs` → 读剪贴板文本（最多重试 4 次，每次 50ms）→ 还原剪贴板 → 文本为空则静默退出 → 在鼠标释放点附近显示工具栏。
+- `shortcut` 模式：任何一次拖选后，按下配置的快捷键（默认 `Ctrl+Alt+Q`）→ 触发。macOS 把 `Ctrl`/`Control` 解析为 ⌃，`Alt`/`Option` 解析为 ⌥，`Win`/`Meta`/`Cmd`/`Command` 解析为 ⌘。
+- 触发后依次：记录前台应用（用于应用过滤）→ 保存剪贴板 → 模拟复制快捷键 → 等待 `captureDelayMs` → 读剪贴板文本（最多重试 4 次，每次 50ms）→ 还原剪贴板 → 文本为空则静默退出 → 在鼠标释放点附近显示工具栏。
+  - Windows 复制快捷键为 Ctrl+C。
+  - macOS 复制快捷键为 ⌘C；若 Control 仍被物理按住，helper 先发送 Control keyUp，复制后再恢复。
 - 应用过滤命中（黑名单命中或白名单未命中）→ 完全不触发。
+  - Windows 按进程名匹配（如 `chrome.exe`）。
+  - macOS 按应用名、Bundle ID 或可执行文件名匹配（三者任一，大小写不敏感）。
 - 工具栏/结果窗自身为前台时不得触发。
-- 不支持通过 UI Automation 直接取词；Ctrl+C 剪贴板是唯一取词路径（与 Cherry Studio 的 Windows 行为一致）。
+- 取词只走剪贴板，不读 UI Automation，不截屏。
+- macOS 需要「辅助功能」授权才能安装全局事件 tap 与发送 ⌘C。授权缺失时 helper 保持运行，设置页显示权限状态与「打开辅助功能设置」按钮。
+- macOS 的辅助功能授权按「负责进程」判定。宿主必须用 LaunchServices（`open`）启动 `SelectionAssistant.app`，授权才属于助手自己；宿主直接 spawn app 内层二进制会把授权算到 DSH 头上。
 
 ## 7. UI 规格
 
 ### 工具栏
 
-- 无边框、置顶、不抢焦点（`WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`），圆角 10px，1px 边框，投影。
+- 无边框、置顶、不抢焦点（Windows：`WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`；macOS：`NSPanel` + `nonactivatingPanel` + `becomesKeyOnlyIfNeeded`），圆角 10px，1px 边框，投影。
 - 高度：普通 40px，紧凑 34px；`scale` 等比缩放。宽度按动作数自适应。
-- 结构：拖动柄（6 点图标，按住可拖动工具栏，位置记到 helper-state）→ 动作按钮（图标 16px + 可选文字 12px）→ 分隔线 → `…` 溢出菜单 → 关闭按钮。
-- 默认显示前 `maxVisibleActions` 个启用动作，其余进溢出菜单；紧凑模式只显示图标（悬停显示 200ms 提示）。
-- 深浅色跟随 Windows 系统主题（注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme`）。
+- 结构：拖动柄（6 点图标，按住可拖动工具栏，位置记到 helper-state）→ 动作按钮（图标 14–16px + 可选文字 12px）→ 分隔线 → `…` 溢出菜单 → 关闭按钮。
+- 默认显示前 `maxVisibleActions` 个启用动作，其余进溢出菜单；紧凑模式只显示图标（悬停显示提示）。
+- 深浅色跟随系统主题（Windows 读注册表 `AppsUseLightTheme`；macOS 读 `NSApp.effectiveAppearance`）。
 - 视觉：浅色 `#FFFFFF` 背景 / `#E6E6EC` 边框 / 主文字 `#1F2329` / hover `#F2F3F5`；深色 `#2B2D31` 背景 / `#3F4147` 边框 / 主文字 `#E8E8EA` / hover `#37393F`；强调色 `#4D6BFE`。
 - Esc 关闭；点击工具栏外关闭。
 
@@ -291,18 +349,20 @@ helper 状态文件 `helper-state.json`（helper 写）：
 - 流式输出：先显示 loading 动画，收到首个 delta 后逐字追加；支持 `**粗体**`、行内代码、代码块、`- ` 列表的轻量渲染，其余按纯文本。
 - `autoClose` 打开时，结果窗失去焦点即关闭（流式中仍关闭并 abort 请求）。
 - `rememberSize` 打开时，用户拖动右下角改变尺寸后写回 helper-state，下次沿用。
-- `opacity` 作用于整个窗口；`alwaysOnTop` 控制 Topmost。
+- `opacity` 作用于整个窗口；`alwaysOnTop` 控制置顶（Windows：Topmost；macOS：窗口 level）。
 
 ### 图标
 
-用 Segoe MDL2 Assets / Segoe Fluent Icons 字符；缺字形时退化为 ASCII 字符，不崩溃。宿主设置页用同一套 icon key。
+- Windows：Segoe MDL2 Assets / Segoe Fluent Icons 字符；缺字形时退化为 ASCII 字符，不崩溃。
+- macOS：SF Symbols 名称映射同一套 icon key（如 translate → `translate`、search → `magnifyingglass`、copy → `doc.on.doc`）；系统没有该符号时退化为文字符号，不崩溃。
+- 宿主设置页用同一套 icon key。
 
 ## 8. 写入边界（并行开发时严格遵守）
 
 | 范围 | 归属 |
 |---|---|
 | `src/*.ts`（宿主）、`scripts/**`、`package.json`、`cordis.patch.yml`、`locale/**`、`icon.svg`、`README.md`、`references/**`（除 cherry 报告） | Lead |
-| `helper/**` | helper-dev |
+| `helper/**`（Windows PowerShell 与 macOS Swift） | helper-dev |
 | `src/client/**` | settings-ui-dev |
 | `references/cherry-studio-selection-assistant.md` | cherry-researcher |
 
@@ -310,16 +370,26 @@ helper 状态文件 `helper-state.json`（helper 写）：
 
 ## 9. 构建与验证
 
-```powershell
-# 构建（esbuild CLI 由 scripts/build.mjs 调用，不需要联网）
+```bash
+# 两端通用：构建宿主与浏览器产物（esbuild CLI，不需要联网）
 node scripts/build.mjs
 
-# 浏览器产物检查（注册 id / 模块表 / 可执行 apply）
+# 两端通用：浏览器产物检查（注册 id / 模块表 / 可执行 apply）
 node scripts/verify-client-bundle.mjs
 
-# 宿主产物检查（裸 node 加载 lib/index.js，导出形态与 Config schema）
+# 两端通用：宿主产物检查（裸 node 加载 lib/index.js，导出形态与 Config schema）
 node scripts/probe.mjs
 
-# helper 自测（不依赖 DSH）：窗口 + 钩子 + 宿主 mock
+# 两端通用：宿主路由、设置夹紧、回环 SSE、鉴权
+node scripts/verify-host.mjs
+
+# Windows：pwsh 解析 + helper-config 字段
+node scripts/verify-helper-resolve.mjs
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1
+
+# macOS：编译 + 自测截图 + mock 宿主 SSE + LaunchServices + 健康退出
+node scripts/verify-macos-helper.mjs
+node scripts/verify-host-macos.mjs
 ```
+
+macOS 构建产物为 `helper/macos/bin/SelectionAssistant.app`；构建参数：`sh scripts/build-macos-helper.sh`（当前架构）或 `sh scripts/build-macos-helper.sh --universal`（arm64 + x86_64）。

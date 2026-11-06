@@ -31,6 +31,8 @@ export interface StatusCardProps {
   state: StateDto
   update: (patch: SettingsPatch) => void
   restart: () => Promise<void>
+  /** Open the macOS Accessibility settings pane. */
+  openPermissions: () => Promise<void>
 }
 
 /**
@@ -38,11 +40,16 @@ export interface StatusCardProps {
  * @param props - settings, helper state, and writers.
  * @returns the card element.
  */
-export function StatusCard({ t, settings, state, update, restart }: StatusCardProps) {
+export function StatusCard({ t, settings, state, update, restart, openPermissions }: StatusCardProps) {
   const [busy, setBusy] = useState(false)
   const [restartError, setRestartError] = useState('')
+  const [permissionBusy, setPermissionBusy] = useState(false)
+  const [permissionError, setPermissionError] = useState('')
   const helper = state.helper
   const helperStatus = helper.status
+  const isMac = state.platform.os === 'darwin'
+  // Tolerate a stale host half that predates the permissions field.
+  const accessibility = state.platform.permissions?.accessibility ?? 'unknown'
 
   const runRestart = async (): Promise<void> => {
     setBusy(true)
@@ -53,6 +60,18 @@ export function StatusCard({ t, settings, state, update, restart }: StatusCardPr
       setRestartError(describeError(error))
     } finally {
       setBusy(false)
+    }
+  }
+
+  const runOpenPermissions = async (): Promise<void> => {
+    setPermissionBusy(true)
+    setPermissionError('')
+    try {
+      await openPermissions()
+    } catch (error) {
+      setPermissionError(describeError(error))
+    } finally {
+      setPermissionBusy(false)
     }
   }
 
@@ -93,9 +112,36 @@ export function StatusCard({ t, settings, state, update, restart }: StatusCardPr
       {helperStatus === 'error' && typeof helper.lastError === 'string' && helper.lastError !== '' && (
         <p className="sa-error-text">{t('status.errorDetail', { message: helper.lastError })}</p>
       )}
+      {isMac && accessibility === 'granted' && (
+        <p className="sa-muted">{t('status.accessibilityGranted')}</p>
+      )}
+      {isMac && accessibility === 'denied' && (
+        <div className="sa-status-line">
+          <span className="sa-warn-text">{t('status.accessibilityDenied')}</span>
+          <span className="sa-spacer" />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={permissionBusy}
+            onClick={() => { void runOpenPermissions() }}
+          >
+            {t('status.openPermissions')}
+          </Button>
+        </div>
+      )}
+      {isMac && accessibility === 'unknown' && (
+        <p className="sa-muted">{t('status.accessibilityUnknown')}</p>
+      )}
+      {permissionError !== '' && (
+        <p className="sa-error-text" role="alert">
+          {t('status.openPermissionsFailed', { message: permissionError })}
+        </p>
+      )}
       {!state.platform.supported && (
         <p className="sa-warn-text">
-          {t('status.unsupported', { reason: state.platform.reason !== '' ? state.platform.reason : 'win32' })}
+          {t('status.unsupported', {
+            reason: state.platform.reason !== '' ? state.platform.reason : state.platform.os,
+          })}
         </p>
       )}
       {restartError !== '' && (

@@ -1,8 +1,10 @@
-# 验证记录 — dsh-selection-assistant 0.1.0
+# 验证记录 — dsh-selection-assistant（0.1.0 Windows / 0.2.0 双端）
 
-验证环境：Windows 11、DSH 桌面版 0.2.2-rc.1（desktop profile）、PowerShell 7.6.9、DSH 默认模型 `deepseek-account / deepseek-flash`。
+0.1.0 验证环境：Windows 11、DSH 桌面版 0.2.2-rc.1（desktop profile）、PowerShell 7.6.9、DSH 默认模型 `deepseek-account / deepseek-flash`。
 
-本记录覆盖首次公开发布版本 0.1.0 的完整验证。开发期按阶段完成修复与功能，下面按验证面与修复记录组织；开发期的内部迭代编号已并入 0.1.0。
+0.2.0 验证环境：macOS 27.2（arm64）、Swift 6.4.2（Xcode Command Line Tools）、Node 26.13.0、DSH 桌面版 0.2.1-rc.3。
+
+本文件保留 0.1.0 的完整验证记录。0.2.0 的 macOS 验证见第 9 节；开发期的内部迭代编号已并入对应版本。
 
 ## 1. 验证矩阵与结果
 
@@ -168,3 +170,55 @@
 局限：预览是 GDI+ 近似，并非浏览器对 SVG 的精确渲染；最终像素由 DSH 前端 `<img>` 渲染决定。
 
 证据：`diagnosis/icon-redesign-2026-11-06/`（icon-candidate.svg、preview.png、render-preview.ps1）。
+
+## 9. macOS 0.2.0 验证（2026-11-06）
+
+验证环境：macOS 27.2（arm64）、Swift 6.4.2（Xcode Command Line Tools，SDK MacOSX27.2）、Node 26.13.0、DSH 桌面版 0.2.1-rc.3。
+
+### 9.1 结果矩阵
+
+| 面 | 命令 / 方法 | 覆盖 | 结果 |
+|---|---|---|---|
+| Swift 构建 | `sh scripts/build-macos-helper.sh` | 13 个 Swift 源文件、target `arm64-apple-macosx13.1`、app bundle Info.plist、ad-hoc codesign | PASS：内层二进制 624016 字节，bundle id `com.evanliu3594.dsh-selection-assistant.helper`，LSMinimumSystemVersion 13.1 |
+| 通用构建 | `sh scripts/build-macos-helper.sh --universal` | arm64 + x86_64 编译、lipo 合并、签名 | PASS：内层 1231712 字节，`lipo -archs` 输出 `x86_64 arm64`；x86_64 链接仅出现 CompatibilityPacks 缺 x86_64 的警告 |
+| 助手自测 | `--selftest --config ... --screenshot-dir ...` | 工具栏、动作按钮、结果窗、pin 两次、窗口缩放重排、离屏截图、selftest JSON | PASS：`ok/clicked/pinToggled/resizeOk/done` 全 true；toolbar 404×128、result 1048×848（测试 config 2 个动作；5 个动作时 644×128） |
+| 助手端到端 | `node scripts/verify-macos-helper.mjs` | 构建、自测、mock 宿主 status/log、command.json 预览、SSE 消费、LaunchServices 启动、健康退出 | PASS：status `error + accessibility=false`（本机未授权，符合预期）；preview 触发 `/v1/action`；mock 返回 meta/delta/done；关掉 mock 宿主后连续 3 次健康检查失败并退出 |
+| 宿主管线 | `node scripts/verify-host-macos.mjs` | 真实 `HelperManager` 自动构建、写 UserDefaults、LaunchServices 启动、status 权限帧、预览动作、SIGTERM 回收 | PASS：status `error + pid`；`permissions.accessibility=denied`；fake LLM 收到 `translate`；SIGTERM 后进程退出 0；helper.log 无 ERROR |
+| 通用宿主 | `node scripts/probe.mjs`、`node scripts/verify-host.mjs` | 裸导入、冷上下文、设置迁移、平台分派、8 条路由、回环 SSE、鉴权、错误帧 | PASS |
+| 浏览器产物 | `node scripts/verify-client-bundle.mjs` | 注册 id、平台模块表、settings.section、locale、布局守卫 | PASS |
+| 视觉抽查 | selftest 截图 + `read_image` | 浅色工具栏（普通/紧凑+溢出）、结果窗、Markdown、底栏、pin、缩放柄 | PASS；截图与 Windows 版色板、圆角、尺寸、字体层级一致 |
+| 深色主题 | 环境变量 `AppleInterfaceStyle=Dark` 下 selftest | 深色工具栏/结果窗 | 未生效，SKIP（AppKit 未跟随该环境变量），深色仍需人工验收 |
+| 真实辅助功能授权 | 需人工在系统设置勾选 | 全局拖选、长按 Control、⌘C 取词、点击外部关闭 | 未验证（agent 无法代授权） |
+| 真实 DeepSeek | 需已安装 DSH 插件与默认模型 | 真实流式翻译 | 未验证（本轮用 fake LLM 验证宿主到 helper 的 SSE 链路） |
+
+### 9.2 权限归属实测
+
+| 启动方式 | responsible pid | `AXIsProcessTrusted()` | 结论 |
+|---|---|---|---|
+| DSH 宿主直接 spawn 内层二进制 | DSH（`/Applications/DeepSeek Harness.app`） | true | 权限来自 DSH，用户必须授权整个 DSH，不可接受 |
+| `open -n -a SelectionAssistant.app` | 助手 app 自己 | false（本机未单独授权） | 授权归属于 `SelectionAssistant`，符合方案 |
+
+因此宿主固定使用 LaunchServices 启动 app；UserDefaults 传配置路径。macOS 27 的 `open --args` 实测不传参数，已改用 `defaults write ... HelperConfigPath`。
+
+### 9.3 本轮定位的构建问题
+
+- 直接执行 `/Library/Developer/CommandLineTools/usr/bin/swiftc` 且未设置 `SDKROOT` 时，target 13.1 报 `unable to load standard library for target 'arm64-apple-macosx13.1'`；同一命令用 `xcrun swiftc` 成功。
+- 修复：构建脚本导出 `SDKROOT=$(xcrun --show-sdk-path)`，保留绝对路径调用。
+- 另一问题是并发构建共享 module cache。构建脚本已改为每次构建创建独立 `.build/build.XXXXXX`，在其中放 module cache 与 TMPDIR，退出时清理。
+- 部署目标 13.0 在当前 Swift 6.4.2 + SDK 27.2 下稳定报标准库缺失；实测 13.1 可用，最低版本改为 macOS 13.1。
+
+### 9.4 未验证 / 人工验收
+
+1. 在 系统设置 → 隐私与安全性 → 辅助功能 勾选 `SelectionAssistant`，确认状态卡由「错误」变为「运行中」。
+2. 在浏览器/记事本中拖选文字，长按 Control，确认工具栏出现；依次点翻译/解释/总结/搜索/复制。
+3. 验证真实 ⌘C 取词、剪贴板还原、应用过滤（应用名/Bundle ID/可执行文件名）。
+4. 结果窗 pin、失焦关闭、点击外部关闭、右下角缩放与记住尺寸。
+5. 深色主题、溢出菜单、多屏/混合 DPI、Intel Mac 实机。
+6. 设置页在真实 DSH 设置中的视觉与权限按钮实际打开系统设置。
+7. 安装到 desktop profile 后经真实 `ctx.llm` 调 DeepSeek 的端到端翻译。
+
+### 9.5 证据
+
+- 构建与验证命令输出：本轮会话输出；`helper/macos/bin/SelectionAssistant.app`（gitignored）。
+- 截图：`.verify-macos-helper-*/`（自测与 mock 预览），`.tools/dark-run/`（深色未生效对照）。
+- 宿主集成日志：`.verify-host-macos-*/`（plugin.log、helper.log、helper-state.json、command.json）。

@@ -204,13 +204,35 @@ export function SettingsPage({ t, api }: SettingsPageProps) {
 
   const getLogs = (): Promise<LogsDto> => api.getLogs(LOG_LINES)
 
+  const isMac = state !== null && state.platform.os === 'darwin'
+  const pageSubtitle = t(isMac ? 'page.subtitleMac' : 'page.subtitle')
+
+  // macOS grants Accessibility outside the page. While the helper is in the
+  // denied/error state, poll the host so the card turns green after the user
+  // flips the switch in System Settings. Local settings drafts stay untouched.
+  const needsStatusRefresh = state !== null
+    && (state.helper.status === 'error' || state.platform.permissions.accessibility === 'denied')
+  useEffect(() => {
+    if (!needsStatusRefresh) return
+    let cancelled = false
+    const timer = window.setInterval(() => {
+      void api.getState().then((next) => {
+        if (!cancelled && mountedRef.current) setState(next)
+      }).catch(() => {})
+    }, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [needsStatusRefresh, api])
+
   if (loadPhase === 'error') {
     return (
       <div className="sa-root">
         <header className="sa-page-head">
           <div>
             <h2 className="sa-page-title">{t('page.title')}</h2>
-            <p className="sa-page-sub">{t('page.subtitle')}</p>
+            <p className="sa-page-sub">{pageSubtitle}</p>
           </div>
         </header>
         <div className="sa-error-banner" role="alert">
@@ -227,7 +249,7 @@ export function SettingsPage({ t, api }: SettingsPageProps) {
         <header className="sa-page-head">
           <div>
             <h2 className="sa-page-title">{t('page.title')}</h2>
-            <p className="sa-page-sub">{t('page.subtitle')}</p>
+            <p className="sa-page-sub">{pageSubtitle}</p>
           </div>
         </header>
         <p className="sa-loading">{t('page.loading')}</p>
@@ -244,13 +266,20 @@ export function SettingsPage({ t, api }: SettingsPageProps) {
       <header className="sa-page-head">
         <div>
           <h2 className="sa-page-title">{t('page.title')}</h2>
-          <p className="sa-page-sub">{t('page.subtitle')}</p>
+          <p className="sa-page-sub">{pageSubtitle}</p>
         </div>
         <SaveStatus t={t} phase={savePhase} error={saveError} onRetry={retrySave} />
       </header>
-      <StatusCard t={t} settings={settings} state={state} update={update} restart={restart} />
-      <TriggerSection t={t} settings={settings} update={update} />
-      <AppFilterSection t={t} settings={settings} update={update} />
+      <StatusCard
+        t={t}
+        settings={settings}
+        state={state}
+        update={update}
+        restart={restart}
+        openPermissions={() => api.openPermissions()}
+      />
+      <TriggerSection t={t} settings={settings} update={update} os={state.platform.os} />
+      <AppFilterSection t={t} settings={settings} update={update} os={state.platform.os} />
       <ToolbarSection t={t} settings={settings} update={update} />
       <ResultSection t={t} settings={settings} update={update} />
       <ActionsSection t={t} settings={settings} update={update} providers={catalogue.providers} />

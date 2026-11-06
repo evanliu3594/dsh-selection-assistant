@@ -155,6 +155,14 @@ export const api = {
     stateOf(call<{ ok: true; state: StateDto }>('/helper/restart', { method: 'POST', body: {} })),
 
   /**
+   * Open the macOS Accessibility settings pane.
+   * @returns nothing; a failure rejects with the host's {@link ApiFailure}.
+   */
+  async openPermissions(): Promise<void> {
+    await call<{ ok: true }>('/helper/open-permissions', { method: 'POST', body: {} })
+  },
+
+  /**
    * Ask the helper to show the toolbar and result window with sample text.
    * @param text - sample text the result window renders.
    */

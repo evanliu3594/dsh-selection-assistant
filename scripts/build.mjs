@@ -1,9 +1,9 @@
 /**
  * Build both halves of the plugin with the esbuild CLI.
  *
- * The DSH shell's Windows sandbox denies Node child processes that use piped
- * stdio, so the esbuild JavaScript API (which spawns its service over pipes)
- * cannot run here. The CLI binary is spawned with inherited stdio instead.
+ * Some DSH shell sandboxes deny Node child processes that use piped stdio, so
+ * the esbuild JavaScript API (which spawns its service over pipes) may fail.
+ * The CLI binary is spawned with inherited stdio instead.
  *
  * Host half  → lib/index.js   (plain Node ESM; `@deepseek-ai/*` stays external)
  * Client half → lib/client.js (classic script wrapped in the ModuleLoader
@@ -20,6 +20,7 @@ if (typeof pkg.name !== 'string' || pkg.name === '') throw new Error('package.js
 /** Candidate esbuild binaries, first existing wins. */
 const ESBUILD_CANDIDATES = [
   process.env.ESBUILD_BINARY ?? '',
+  'node_modules/.bin/esbuild',
   'node_modules/.bin/esbuild.exe',
   'node_modules/esbuild/bin/esbuild',
   '../dsh-aibrarian/node_modules/.pnpm/@esbuild+win32-x64@0.28.2/node_modules/@esbuild/win32-x64/esbuild.exe',

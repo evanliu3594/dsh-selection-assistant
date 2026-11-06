@@ -9,6 +9,8 @@ export interface AppFilterSectionProps {
   t: Translate
   settings: Settings
   update: (patch: SettingsPatch) => void
+  /** Host platform id: `darwin` uses app names and bundle IDs instead of process names. */
+  os: string
 }
 
 /**
@@ -25,9 +27,10 @@ function parseProcesses(value: string): string[] {
  * @param props - settings and the patch writer.
  * @returns the card element.
  */
-export function AppFilterSection({ t, settings, update }: AppFilterSectionProps) {
+export function AppFilterSection({ t, settings, update, os }: AppFilterSectionProps) {
   const [processes, setProcesses] = useState(settings.appFilter.processes.join(', '))
   const mode = settings.appFilter.mode
+  const isMac = os === 'darwin'
 
   const changeMode = (next: AppFilterMode): void => {
     update({ appFilter: { mode: next } })
@@ -65,12 +68,15 @@ export function AppFilterSection({ t, settings, update }: AppFilterSectionProps)
       >
         <p className="sa-row-hint">{hints[mode]}</p>
         {mode !== 'off' && (
-          <FieldRow label={t('appFilter.processes')} hint={t('appFilter.processesHint')}>
+          <FieldRow
+            label={t(isMac ? 'appFilter.processesMac' : 'appFilter.processes')}
+            hint={t(isMac ? 'appFilter.processesHintMac' : 'appFilter.processesHint')}
+          >
             <Input
               className="sa-input-wide"
               value={processes}
-              aria-label={t('appFilter.processes')}
-              placeholder={t('appFilter.processesPlaceholder')}
+              aria-label={t(isMac ? 'appFilter.processesMac' : 'appFilter.processes')}
+              placeholder={t(isMac ? 'appFilter.processesPlaceholderMac' : 'appFilter.processesPlaceholder')}
               onChange={(event) => { changeProcesses(event.currentTarget.value) }}
               onBlur={() => { setProcesses(parseProcesses(processes).join(', ')) }}
             />

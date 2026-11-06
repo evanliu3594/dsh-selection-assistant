@@ -1,6 +1,8 @@
 # helper — Windows 划词助手进程
 
-PowerShell 7 + WPF 实现的独立助手进程。宿主用下面的命令启动它：
+PowerShell 7 + WPF 实现的独立助手进程。macOS 版本见 [helper/macos/README.md](macos/README.md)。
+
+宿主用下面的命令启动它：
 
 ```powershell
 pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <helper>\SelectionAssistant.ps1 -ConfigPath <dataDir>\helper-config.json

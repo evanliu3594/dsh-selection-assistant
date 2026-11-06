@@ -11,7 +11,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { once } from 'node:events'
 import type { ProviderOption, RouteError, Settings, StateDto } from './contract.js'
-import { PREVIEW_TEXT, ROUTE_PREFIX } from './contract.js'
+import { PREVIEW_TEXT, ROUTE_PREFIX, type HelperKind } from './contract.js'
 import type { HelperManager } from './helper.js'
 import type { LlmBridge } from './llm.js'
 import type { PluginLogger } from './log.js'
@@ -42,9 +42,12 @@ export interface ServerDeps {
   llm: LlmBridge
   helper: HelperManager
   logger: PluginLogger
-  pwshPath: () => string
+  helperPath: () => string
+  helperKind: () => HelperKind
   platformSupported: () => boolean
   platformReason: () => string
+  /** Open the OS permission pane; macOS only, throws elsewhere. */
+  openPermissions: () => Promise<void>
   onSettingsSaved: (next: Settings) => void
 }
 
@@ -52,6 +55,7 @@ export interface ServerDeps {
 interface StatusFrame {
   state?: unknown
   message?: unknown
+  permissions?: { accessibility?: unknown }
 }
 
 /** Write one JSON response. */
@@ -113,9 +117,11 @@ export function buildState(deps: ServerDeps): StateDto {
     platform: {
       os: process.platform,
       arch: process.arch,
-      pwsh: deps.pwshPath(),
+      helper: deps.helperPath(),
+      helperKind: deps.helperKind(),
       supported: deps.platformSupported(),
       reason: deps.platformReason(),
+      permissions: deps.helper.getPermissions(),
     },
     defaults,
     paths: { dataDir: deps.dataDir, log: deps.logPath },
@@ -189,6 +195,15 @@ export function createSettingsHandler(deps: ServerDeps): (req: IncomingMessage, 
         if (method !== 'POST') return fail(res, 405, 'method-not-allowed', '该路由只支持 POST。')
         await deps.helper.restart()
         return sendJson(res, 200, { ok: true, state: buildState(deps) })
+      }
+      if (path === `${ROUTE_PREFIX}/helper/open-permissions`) {
+        if (method !== 'POST') return fail(res, 405, 'method-not-allowed', '该路由只支持 POST。')
+        try {
+          await deps.openPermissions()
+        } catch (error) {
+          return fail(res, 409, 'open-permissions-failed', error instanceof Error ? error.message : '无法打开系统设置。')
+        }
+        return sendJson(res, 200, { ok: true })
       }
       if (path === `${ROUTE_PREFIX}/helper/preview`) {
         if (method !== 'POST') return fail(res, 405, 'method-not-allowed', '该路由只支持 POST。')
@@ -289,6 +304,13 @@ export class ActionServer {
       }
       if (url.pathname === '/v1/status' && req.method === 'POST') {
         const body = (await readJsonBody(req)) as StatusFrame | undefined
+        const accessibility = body?.permissions?.accessibility
+        if (typeof accessibility === 'boolean') this.deps.helper.setAccessibility(accessibility)
+        // A macOS helper only reports ready after its event tap is installed, so
+        // readiness implies the Accessibility grant even if the frame omits it.
+        if (body?.state === 'ready' && process.platform === 'darwin' && typeof accessibility !== 'boolean') {
+          this.deps.helper.setAccessibility(true)
+        }
         if (body?.state === 'ready') this.deps.helper.markReady()
         else if (body?.state === 'error') this.deps.helper.markError(typeof body.message === 'string' ? body.message : '助手报告错误。')
         return sendJson(res, 200, { ok: true })
@@ -395,6 +417,7 @@ export function settingsRoutePaths(): string[] {
     `${ROUTE_PREFIX}/models`,
     `${ROUTE_PREFIX}/test`,
     `${ROUTE_PREFIX}/helper/restart`,
+    `${ROUTE_PREFIX}/helper/open-permissions`,
     `${ROUTE_PREFIX}/helper/preview`,
     `${ROUTE_PREFIX}/logs`,
   ]

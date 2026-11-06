@@ -1,8 +1,13 @@
 /**
- * Lifecycle manager for the Windows helper process (`helper/SelectionAssistant.ps1`).
+ * Lifecycle manager for the native selection-helper process.
+ *
+ * Two runtimes are supported from one manager:
+ *   - Windows: PowerShell 7 runs `helper/SelectionAssistant.ps1` (WPF UI).
+ *   - macOS:   a statically linked Swift binary `helper/macos/bin/SelectionAssistant`
+ *              is compiled on demand from `helper/macos/Sources` (AppKit UI).
  *
  * The helper is the only part of the feature that touches the operating system:
- * global hooks, the clipboard, and the floating WPF windows. This module owns
+ * global hooks, the clipboard, and the floating windows. This module owns
  * launching it with the right config, restarting it on crash or settings change,
  * and tearing it down when the plugin unloads.
  *
@@ -11,18 +16,40 @@
  * soon as this side disconnects.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import type { HelperCommand, HelperConfig, HelperStatus, Settings } from './contract.js'
+import type {
+  AccessibilityPermission,
+  HelperCommand,
+  HelperConfig,
+  HelperKind,
+  HelperStatus,
+  Settings,
+} from './contract.js'
 import type { PluginLogger } from './log.js'
 
 /** Package root resolved from this module's location (works for src/ and lib/). */
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** Relative path of the PowerShell entry point. */
-const HELPER_SCRIPT = join(PACKAGE_ROOT, 'helper', 'SelectionAssistant.ps1')
+/** Relative path of the Windows PowerShell entry point. */
+const HELPER_WIN_SCRIPT = join(PACKAGE_ROOT, 'helper', 'SelectionAssistant.ps1')
+
+/** macOS Swift sources; their presence makes the package installable on macOS. */
+const HELPER_MAC_SOURCES = join(PACKAGE_ROOT, 'helper', 'macos', 'Sources')
+
+/** App bundle launched through LaunchServices so TCC attributes the grant to it. */
+const HELPER_MAC_APP = join(PACKAGE_ROOT, 'helper', 'macos', 'bin', 'SelectionAssistant.app')
+
+/** Inner executable of the macOS app bundle. */
+const HELPER_MAC_BIN = join(HELPER_MAC_APP, 'Contents', 'MacOS', 'SelectionAssistant')
+
+/** Bundle id the macOS app reads its launch preferences from. */
+const MAC_HELPER_BUNDLE_ID = 'com.evanliu3594.dsh-selection-assistant.helper'
+
+/** Build script that compiles the Swift helper with swiftc. */
+const MAC_BUILD_SCRIPT = join(PACKAGE_ROOT, 'scripts', 'build-macos-helper.sh')
 
 /** How many crashed launches are retried before giving up until a manual restart. */
 const MAX_AUTO_RESTARTS = 5
@@ -30,14 +57,20 @@ const MAX_AUTO_RESTARTS = 5
 /** Delay before an automatic restart, multiplied by the attempt number. */
 const RESTART_BASE_MS = 1200
 
+/** How long a spawned helper may take to report readiness. */
+const READY_TIMEOUT_MS = 15_000
+
+/** Upper bound for the first-run Swift build. */
+const MAC_BUILD_TIMEOUT_MS = 240_000
+
 /** Bundle version fallback when package.json cannot be read at runtime. */
 function readVersion(): string {
   try {
     const raw: unknown = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'))
     const version = (raw as { version?: unknown }).version
-    return typeof version === 'string' ? version : '0.1.0'
+    return typeof version === 'string' ? version : '0.2.0'
   } catch {
-    return '0.1.0'
+    return '0.2.0'
   }
 }
 
@@ -63,9 +96,21 @@ export interface HelperManagerOptions {
   getSettings: () => Settings
   getSubprocess: () => SubprocessServiceLike | undefined
   getEndpoint: () => HelperEndpoint | undefined
-  /** Row-config override for `pwsh.exe`; an explicit user setting still wins. */
-  pwshPathOverride?: string
+  /** Row-config override for the helper executable; an explicit user setting still wins. */
+  helperPathOverride?: string
   onStatusChange?: (status: HelperStatus) => void
+}
+
+/** Accessibility permission as tracked from helper status frames. */
+export interface HelperPermissionState {
+  accessibility: AccessibilityPermission
+}
+
+/** Native runtime this platform uses. */
+export function helperKindForPlatform(platform: NodeJS.Platform = process.platform): HelperKind {
+  if (platform === 'win32') return 'powershell'
+  if (platform === 'darwin') return 'swift'
+  return 'none'
 }
 
 /** Find `pwsh.exe` on PATH and in the usual installation directories. */
@@ -106,6 +151,54 @@ function isLegacyPowerShell(path: string): boolean {
   return basename(path).toLowerCase() === 'powershell.exe'
 }
 
+/** Promise-based delay used by the pid lifecycle helpers. */
+function delay(ms: number): Promise<void> {
+  return new Promise(resolveDelay => {
+    setTimeout(resolveDelay, ms)
+  })
+}
+
+/** Newest modification time below a directory, or 0 when it cannot be read. */
+function newestMtime(directory: string): number {
+  let newest = 0
+  let entries: ReturnType<typeof readdirSync>
+  try {
+    entries = readdirSync(directory, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const entry of entries) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) {
+      newest = Math.max(newest, newestMtime(path))
+      continue
+    }
+    try {
+      newest = Math.max(newest, statSync(path).mtimeMs)
+    } catch {
+      // A file that vanished between readdir and stat is simply ignored.
+    }
+  }
+  return newest
+}
+
+/** Open the macOS Accessibility pane; the helper cannot grant TCC permission itself. */
+export async function openAccessibilitySettings(): Promise<void> {
+  if (process.platform !== 'darwin') throw new Error('只有 macOS 需要辅助功能权限。')
+  await new Promise<void>((resolveOpen, rejectOpen) => {
+    const child = spawn('open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'], {
+      stdio: 'ignore',
+    })
+    child.once('error', error => {
+      rejectOpen(new Error(`无法打开系统设置：${error.message}`))
+    })
+    child.once('exit', code => {
+      if (code === 0) resolveOpen()
+      else rejectOpen(new Error(`打开系统设置失败（code=${String(code ?? 'null')}）。`))
+    })
+  })
+}
+
 /** Helper process manager. */
 export class HelperManager {
   private readonly options: HelperManagerOptions
@@ -114,12 +207,16 @@ export class HelperManager {
   private readonly commandFile: string
   private child: ChildProcess | undefined
   private status: HelperStatus = { status: 'stopped', restarts: 0 }
+  private permissionsState: HelperPermissionState = { accessibility: 'unknown' }
   private intentionalStop = false
   private restartTimer: NodeJS.Timeout | undefined
   private updateTimer: NodeJS.Timeout | undefined
   private readyTimer: NodeJS.Timeout | undefined
   private disposed = false
-  private resolvedPwsh: string | undefined
+  private resolvedExecutable = ''
+  private macBuild: Promise<void> | undefined
+  private macMonitorTimer: NodeJS.Timeout | undefined
+  private macLaunchAt = 0
 
   constructor(options: HelperManagerOptions) {
     this.options = options
@@ -129,19 +226,60 @@ export class HelperManager {
     this.commandFile = join(options.dataDir, 'command.json')
   }
 
+  /** Native runtime this platform uses. */
+  get kind(): HelperKind {
+    return helperKindForPlatform()
+  }
+
   /** Current status snapshot. */
   getStatus(): HelperStatus {
     return this.status
   }
 
-  /** Absolute path of the helper entry point, for the settings page diagnostics. */
+  /** Last Accessibility permission reported by the helper (macOS only). */
+  getPermissions(): HelperPermissionState {
+    return { ...this.permissionsState }
+  }
+
+  /** Record the Accessibility permission from a helper status frame. */
+  setAccessibility(granted: boolean): void {
+    this.permissionsState = { accessibility: granted ? 'granted' : 'denied' }
+  }
+
+  /** Absolute path of the native helper entry point, kept for diagnostics. */
   get scriptPath(): string {
-    return HELPER_SCRIPT
+    return this.kind === 'swift' ? HELPER_MAC_APP : HELPER_WIN_SCRIPT
   }
 
   /** Whether the helper entry point ships with the package. */
   get scriptPresent(): boolean {
-    return existsSync(HELPER_SCRIPT)
+    if (this.kind === 'swift') return existsSync(HELPER_MAC_SOURCES)
+    return existsSync(HELPER_WIN_SCRIPT)
+  }
+
+  /** Whether the macOS Swift sources ship with the package. */
+  get sourcePresent(): boolean {
+    return existsSync(HELPER_MAC_SOURCES)
+  }
+
+  /** Whether the compiled macOS app bundle exists right now. */
+  get binaryPresent(): boolean {
+    return existsSync(HELPER_MAC_APP)
+  }
+
+  /** Resolved (or best-known) helper executable path. */
+  get executablePath(): string {
+    if (this.resolvedExecutable !== '') return this.resolvedExecutable
+    const configured = this.options.getSettings().advanced.helperPath.trim()
+    if (configured !== '') return configured
+    if (this.kind === 'powershell') return findPwshOnDisk('') ?? 'pwsh'
+    if (this.kind === 'swift') return HELPER_MAC_APP
+    return ''
+  }
+
+  /** Backward-compatible alias used by the Windows verification script. */
+  get pwshPath(): string {
+    return this.executablePath
   }
 
   /** Publish a status change to listeners. */
@@ -150,22 +288,22 @@ export class HelperManager {
     this.options.onStatusChange?.(this.status)
   }
 
-  /** Resolved PowerShell path, once a launch attempt resolved one. */
-  get pwshPath(): string {
-    return this.resolvedPwsh ?? ''
-  }
-
-  /** Resolve PowerShell candidates in priority order; the first that launches wins. */
-  async resolvePwshCandidates(): Promise<string[]> {
+  /** Resolve helper candidates in priority order. */
+  async resolveCandidates(): Promise<string[]> {
+    if (this.kind === 'none') return []
+    const settings = this.options.getSettings()
+    const configured = settings.advanced.helperPath.trim()
+    if (this.kind === 'swift') {
+      if (configured !== '') return [configured]
+      return [HELPER_MAC_APP]
+    }
     const candidates: string[] = []
     const push = (candidate: string): void => {
       const trimmed = candidate.trim()
       if (trimmed === '' || candidates.includes(trimmed) || isLegacyPowerShell(trimmed)) return
       candidates.push(trimmed)
     }
-    const settings = this.options.getSettings()
-    const configured = settings.advanced.pwshPath.trim()
-    const override = (this.options.pwshPathOverride ?? '').trim()
+    const override = (this.options.helperPathOverride ?? '').trim()
     for (const explicit of [configured, override]) {
       if (explicit === '' || isLegacyPowerShell(explicit)) continue
       try {
@@ -192,12 +330,22 @@ export class HelperManager {
   }
 
   /** First candidate path, for diagnostics and the settings page. */
+  async resolveExecutable(): Promise<string | undefined> {
+    return (await this.resolveCandidates())[0]
+  }
+
+  /** Backward-compatible alias for the Windows verification script. */
+  async resolvePwshCandidates(): Promise<string[]> {
+    return this.resolveCandidates()
+  }
+
+  /** Backward-compatible alias for the Windows verification script. */
   async resolvePwsh(): Promise<string | undefined> {
-    return (await this.resolvePwshCandidates())[0]
+    return this.resolveExecutable()
   }
 
   /** Write the helper config file atomically. */
-  private writeConfig(endpoint: HelperEndpoint, pwshPath: string): HelperConfig {
+  private writeConfig(endpoint: HelperEndpoint, executable: string): HelperConfig {
     const settings = this.options.getSettings()
     const config: HelperConfig = {
       version: 1,
@@ -227,7 +375,9 @@ export class HelperManager {
     const temporary = `${this.configFile}.tmp`
     writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
     renameSync(temporary, this.configFile)
-    this.options.logger.info(`helper config written (${String(config.actions.length)} action(s), pwsh=${pwshPath})`)
+    this.options.logger.info(
+      `helper config written (${String(config.actions.length)} action(s), helper=${executable})`,
+    )
     return config
   }
 
@@ -265,9 +415,9 @@ export class HelperManager {
   }
 
   /** Wire one spawned child: output capture, exit handling, and the ready watchdog. */
-  private attachChild(child: ChildProcess, pwsh: string): void {
+  private attachChild(child: ChildProcess, executable: string): void {
     this.child = child
-    this.resolvedPwsh = pwsh
+    this.resolvedExecutable = executable
     this.wireOutput(child.stdout, 'out')
     this.wireOutput(child.stderr, 'err')
     child.once('error', error => {
@@ -287,18 +437,15 @@ export class HelperManager {
     })
     this.publish({ status: 'starting', pid: child.pid, startedAt: Date.now() })
     this.armReadyTimer()
-    this.options.logger.info(`helper launched with ${pwsh} (pid=${String(child.pid ?? '')})`)
+    this.options.logger.info(`helper launched with ${executable} (pid=${String(child.pid ?? '')})`)
   }
 
-  /** Spawn one candidate and resolve once the OS reports success. */
-  private spawnCandidate(pwsh: string, endpoint: HelperEndpoint): Promise<ChildProcess> {
-    const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_SCRIPT, '-ConfigPath', this.configFile]
-    // Write the config before spawning: the helper reads it during startup.
-    this.writeConfig(endpoint, pwsh)
+  /** Spawn one executable and resolve once the OS reports success. */
+  private spawnProcess(executable: string, args: string[]): Promise<ChildProcess> {
     return new Promise<ChildProcess>((resolveSpawn, rejectSpawn) => {
       let child: ChildProcess
       try {
-        child = spawn(pwsh, args, {
+        child = spawn(executable, args, {
           cwd: this.options.dataDir,
           windowsHide: true,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -321,6 +468,164 @@ export class HelperManager {
     })
   }
 
+  /** Spawn one PowerShell candidate; the config file is written first. */
+  private spawnPowerShell(pwsh: string, endpoint: HelperEndpoint): Promise<ChildProcess> {
+    const args = [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      HELPER_WIN_SCRIPT,
+      '-ConfigPath',
+      this.configFile,
+    ]
+    // Write the config before spawning: the helper reads it during startup.
+    this.writeConfig(endpoint, pwsh)
+    return this.spawnProcess(pwsh, args)
+  }
+
+  /**
+   * Launch the macOS app bundle through LaunchServices. This is what makes the
+   * bundle, instead of the DSH host, the TCC "responsible process" that owns the
+   * Accessibility grant. stdin is not available on this path, so the helper
+   * watches /v1/health and exits when the host disappears.
+   */
+  private async launchMacApp(appPath: string): Promise<void> {
+    // macOS 27's `open` drops --args for this ad-hoc bundle, so the config path
+    // travels through UserDefaults instead of argv.
+    await this.writeMacPreference('HelperConfigPath', this.configFile)
+    await new Promise<void>((resolveLaunch, rejectLaunch) => {
+      const child = spawn('/usr/bin/open', ['-n', '-a', appPath], {
+        cwd: this.options.dataDir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env },
+      })
+      let stderr = ''
+      child.stderr?.setEncoding('utf8')
+      child.stderr?.on('data', chunk => {
+        stderr += chunk
+      })
+      child.once('error', rejectLaunch)
+      child.once('exit', code => {
+        if (code === 0) resolveLaunch()
+        else rejectLaunch(new Error(stderr.trim() !== '' ? stderr.trim() : `open 退出码 ${String(code ?? 'null')}`))
+      })
+    })
+  }
+
+  /** Write one launch preference the macOS app reads from UserDefaults. */
+  private writeMacPreference(key: string, value: string): Promise<void> {
+    return new Promise<void>((resolveWrite, rejectWrite) => {
+      const child = spawn('/usr/bin/defaults', ['write', MAC_HELPER_BUNDLE_ID, key, '-string', value], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      })
+      let stderr = ''
+      child.stderr?.setEncoding('utf8')
+      child.stderr?.on('data', chunk => {
+        stderr += chunk
+      })
+      child.once('error', rejectWrite)
+      child.once('exit', code => {
+        if (code === 0) resolveWrite()
+        else rejectWrite(new Error(stderr.trim() !== '' ? stderr.trim() : `defaults 退出码 ${String(code ?? 'null')}`))
+      })
+    })
+  }
+
+  /** Read the pid the helper wrote into helper-state.json. */
+  private readStatePid(): number | undefined {
+    try {
+      const raw: unknown = JSON.parse(readFileSync(this.stateFile, 'utf8'))
+      const pid = (raw as { pid?: unknown }).pid
+      return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Whether a pid is alive; EPERM still means the process exists. */
+  private isPidAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      return (error as { code?: unknown }).code === 'EPERM'
+    }
+  }
+
+  /** Terminate one helper pid gracefully, then forcefully after 2.5s. */
+  private async terminatePid(pid: number): Promise<void> {
+    if (!this.isPidAlive(pid)) return
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // Could have exited between the check and the signal.
+    }
+    const started = Date.now()
+    while (Date.now() - started < 2500) {
+      await delay(100)
+      if (!this.isPidAlive(pid)) return
+    }
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Already gone.
+    }
+    await delay(100)
+  }
+
+  /** True when a helper process is alive for the current platform. */
+  private isHelperAlive(): boolean {
+    if (this.kind === 'swift') {
+      const pid = this.status.pid ?? this.readStatePid()
+      return pid !== undefined && this.isPidAlive(pid)
+    }
+    return this.child !== undefined
+  }
+
+  /** Stop a leftover macOS helper without publishing a final stopped state. */
+  private async stopMacProcess(): Promise<void> {
+    const pid = this.status.pid ?? this.readStatePid()
+    if (pid !== undefined) await this.terminatePid(pid)
+    this.publish({ pid: undefined })
+  }
+
+  /** Clear the macOS liveness monitor. */
+  private clearMacMonitor(): void {
+    if (this.macMonitorTimer !== undefined) {
+      clearInterval(this.macMonitorTimer)
+      this.macMonitorTimer = undefined
+    }
+  }
+
+  /**
+   * Watch the macOS helper pid after launch. The helper is a LaunchServices
+   * child, so the host has no exit event; poll the pid that helper-state.json
+   * reports and restart once when it disappears.
+   */
+  private startMacMonitor(): void {
+    this.clearMacMonitor()
+    this.macLaunchAt = Date.now()
+    this.macMonitorTimer = setInterval(() => {
+      if (this.disposed || this.intentionalStop) return
+      if (Date.now() - this.macLaunchAt < 8000) return
+      const pid = this.status.pid ?? this.readStatePid()
+      if (pid !== undefined) {
+        if (this.status.pid !== pid) this.publish({ pid })
+        if (this.isPidAlive(pid)) return
+      }
+      if (this.status.status === 'stopped') return
+      this.clearMacMonitor()
+      this.options.logger.error('macOS helper process disappeared')
+      if (this.status.status !== 'error') {
+        this.publish({ status: 'error', pid: undefined, lastError: '助手进程已退出。' })
+      }
+      this.scheduleRestart()
+    }, 5000)
+    this.macMonitorTimer.unref?.()
+  }
+
   /** Arm the watchdog that reports a helper which never announces readiness. */
   private armReadyTimer(): void {
     this.clearReadyTimer()
@@ -329,8 +634,97 @@ export class HelperManager {
         this.options.logger.warn('helper did not report ready within 15s')
         this.publish({ status: 'error', lastError: '助手进程启动后 15 秒内没有报告就绪，请查看日志。' })
       }
-    }, 15_000)
+    }, READY_TIMEOUT_MS)
     this.readyTimer.unref?.()
+  }
+
+  /** Whether the Swift helper must be compiled (missing binary or newer sources). */
+  private macHelperNeedsBuild(): boolean {
+    try {
+      if (!existsSync(HELPER_MAC_APP)) return true
+      const binaryMtime = statSync(HELPER_MAC_BIN).mtimeMs
+      const sourceMtime = Math.max(newestMtime(HELPER_MAC_SOURCES), statSync(MAC_BUILD_SCRIPT).mtimeMs)
+      return sourceMtime > binaryMtime
+    } catch {
+      return true
+    }
+  }
+
+  /** Compile the Swift helper once per plugin lifetime when needed. */
+  private async ensureMacHelper(): Promise<void> {
+    const configured = this.options.getSettings().advanced.helperPath.trim()
+    if (configured !== '') {
+      if (!existsSync(configured)) throw new Error(`设置的助手路径不存在：${configured}`)
+      return
+    }
+    if (!this.macHelperNeedsBuild()) return
+    if (this.macBuild !== undefined) return this.macBuild
+    // A running instance keeps the old bundle image; stop it before replacing
+    // files so the next LaunchServices launch picks up the new binary.
+    await this.stopMacProcess()
+    this.macBuild = this.buildMacHelper()
+    try {
+      await this.macBuild
+    } finally {
+      this.macBuild = undefined
+    }
+  }
+
+  /** Run the swiftc build script; logs every line and fails with an actionable message. */
+  private buildMacHelper(): Promise<void> {
+    if (!existsSync(MAC_BUILD_SCRIPT)) {
+      return Promise.reject(new Error(`找不到 macOS 构建脚本：${MAC_BUILD_SCRIPT}`))
+    }
+    this.options.logger.info('building macOS helper with swiftc')
+    this.publish({ status: 'starting', lastError: '' })
+    return new Promise<void>((resolveBuild, rejectBuild) => {
+      const child = spawn('/bin/sh', [MAC_BUILD_SCRIPT], {
+        cwd: PACKAGE_ROOT,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env },
+      })
+      const tail: string[] = []
+      const collect = (stream: NodeJS.ReadableStream | null): void => {
+        if (stream === null) return
+        stream.setEncoding('utf8')
+        let buffer = ''
+        stream.on('data', (chunk: string) => {
+          buffer += chunk
+          const lines = buffer.split(/\r?\n/)
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            if (line.trim() === '') continue
+            tail.push(line)
+            if (tail.length > 12) tail.shift()
+            this.options.logger.info(`[helper:build] ${line}`)
+          }
+        })
+      }
+      collect(child.stdout)
+      collect(child.stderr)
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // Already gone.
+        }
+        rejectBuild(new Error('编译超过 4 分钟，已终止。请检查 Xcode Command Line Tools。'))
+      }, MAC_BUILD_TIMEOUT_MS)
+      child.once('error', error => {
+        clearTimeout(timer)
+        rejectBuild(error)
+      })
+      child.once('exit', code => {
+        clearTimeout(timer)
+        if (code === 0) {
+          this.options.logger.info('macOS helper built')
+          resolveBuild()
+          return
+        }
+        const detail = tail.length > 0 ? tail.join(' / ') : '没有构建输出'
+        rejectBuild(new Error(`swiftc 退出码 ${String(code ?? 'null')}：${detail}`))
+      })
+    })
   }
 
   /** Start the helper when the feature is enabled and the platform supports it. */
@@ -341,12 +735,13 @@ export class HelperManager {
       this.publish({ status: 'stopped', lastError: '' })
       return
     }
-    if (process.platform !== 'win32') {
-      this.publish({ status: 'error', lastError: '划词助手目前只支持 Windows。' })
+    if (this.kind === 'none') {
+      this.publish({ status: 'error', lastError: '划词助手支持 Windows 10/11 与 macOS 13.1 及以上。' })
       return
     }
     if (!this.scriptPresent) {
-      this.publish({ status: 'error', lastError: `找不到助手脚本：${HELPER_SCRIPT}` })
+      const missing = this.kind === 'swift' ? HELPER_MAC_SOURCES : HELPER_WIN_SCRIPT
+      this.publish({ status: 'error', lastError: `找不到助手文件：${missing}` })
       return
     }
     const endpoint = this.options.getEndpoint()
@@ -356,11 +751,50 @@ export class HelperManager {
     }
     this.intentionalStop = false
     this.publish({ status: 'starting', lastError: '' })
-    const candidates = await this.resolvePwshCandidates()
+    if (this.kind === 'swift') {
+      try {
+        await this.ensureMacHelper()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        this.options.logger.error(`macOS helper build failed: ${message}`)
+        this.publish({
+          status: 'error',
+          lastError: `无法构建 macOS 助手：${message}。请安装 Xcode Command Line Tools（xcode-select --install）后重启插件。`,
+        })
+        return
+      }
+      if (this.disposed || this.intentionalStop) return
+      const configured = settings.advanced.helperPath.trim()
+      const target = configured !== '' ? configured : HELPER_MAC_APP
+      try {
+        await this.stopMacProcess()
+        this.writeConfig(endpoint, target)
+        this.resolvedExecutable = target
+        if (target.endsWith('.app')) {
+          await this.launchMacApp(target)
+          this.publish({ status: 'starting', pid: undefined, startedAt: Date.now(), lastError: '' })
+          this.startMacMonitor()
+          this.armReadyTimer()
+        } else {
+          const child = await this.spawnProcess(target, ['--config', this.configFile])
+          this.attachChild(child, target)
+        }
+        this.options.logger.info(`macOS helper launched (${target})`)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        this.options.logger.error(`macOS helper launch failed: ${message}`)
+        this.publish({
+          status: 'error',
+          lastError: `无法启动助手进程（${target}）：${message}。请在设置 → 高级 → 助手路径里填写 SelectionAssistant.app 的完整路径。`,
+        })
+      }
+      return
+    }
+    const candidates = await this.resolveCandidates()
     const failures: string[] = []
     for (const pwsh of candidates) {
       try {
-        const child = await this.spawnCandidate(pwsh, endpoint)
+        const child = await this.spawnPowerShell(pwsh, endpoint)
         this.attachChild(child, pwsh)
         return
       } catch (error) {
@@ -371,21 +805,25 @@ export class HelperManager {
     }
     this.publish({
       status: 'error',
-      lastError: `无法启动助手进程。已尝试：${failures.join('；')}。请在设置 → 高级 → pwsh 路径里填写 pwsh.exe 的完整路径。`,
+      lastError: `无法启动助手进程。已尝试：${failures.join('；')}。请在设置 → 高级 → 助手路径里填写 pwsh.exe 的完整路径。`,
     })
   }
 
   /** The helper announced readiness. */
   markReady(): void {
     this.clearReadyTimer()
-    this.publish({ status: 'running', lastError: '', startedAt: this.status.startedAt ?? Date.now() })
-    this.options.logger.info(`helper ready (pid=${String(this.status.pid ?? '')})`)
+    const pid = this.status.pid ?? this.readStatePid()
+    this.publish({ status: 'running', lastError: '', pid, startedAt: this.status.startedAt ?? Date.now() })
+    if (this.kind === 'swift') this.startMacMonitor()
+    this.options.logger.info(`helper ready (pid=${String(pid ?? '')})`)
   }
 
   /** The helper reported a fatal error. */
   markError(message: string): void {
     this.clearReadyTimer()
-    this.publish({ status: 'error', lastError: message })
+    const pid = this.status.pid ?? this.readStatePid()
+    this.publish({ status: 'error', lastError: message, pid })
+    if (this.kind === 'swift') this.startMacMonitor()
   }
 
   /** One automatic restart after an unexpected exit, bounded by MAX_AUTO_RESTARTS. */
@@ -407,9 +845,23 @@ export class HelperManager {
   async stop(): Promise<void> {
     this.intentionalStop = true
     this.clearReadyTimer()
+    this.clearMacMonitor()
     if (this.restartTimer !== undefined) {
       clearTimeout(this.restartTimer)
       this.restartTimer = undefined
+    }
+    if (this.kind === 'swift') {
+      let pid = this.status.pid ?? this.readStatePid()
+      // The app writes helper-state.json shortly after LaunchServices starts it;
+      // wait briefly so an immediate disable/restart does not orphan the process.
+      for (let attempt = 0; pid === undefined && attempt < 10; attempt += 1) {
+        await delay(100)
+        pid = this.readStatePid()
+      }
+      if (pid !== undefined) await this.terminatePid(pid)
+      this.child = undefined
+      this.publish({ status: 'stopped', pid: undefined, lastError: '' })
+      return
     }
     const child = this.child
     this.child = undefined
@@ -459,7 +911,7 @@ export class HelperManager {
       }
       const endpoint = this.options.getEndpoint()
       if (endpoint === undefined) return
-      if (this.child !== undefined) {
+      if (this.isHelperAlive()) {
         void this.restart()
       } else {
         void this.start()
@@ -470,7 +922,7 @@ export class HelperManager {
 
   /** Ask the helper to show a preview toolbar and result window. */
   preview(text: string): void {
-    if (this.child === undefined) throw new Error('助手进程未在运行，请先启动。')
+    if (!this.isHelperAlive()) throw new Error('助手进程未在运行，请先启动。')
     const command: HelperCommand = { id: randomUUID(), type: 'preview', text }
     const temporary = `${this.commandFile}.tmp`
     writeFileSync(temporary, `${JSON.stringify(command, null, 2)}\n`, 'utf8')
@@ -483,6 +935,7 @@ export class HelperManager {
     this.disposed = true
     if (this.updateTimer !== undefined) clearTimeout(this.updateTimer)
     this.updateTimer = undefined
+    this.clearMacMonitor()
     await this.stop()
   }
 

@@ -36,7 +36,7 @@ export interface AdvancedSectionProps {
 export function AdvancedSection({
   t, settings, state, update, restart, preview, getLogs,
 }: AdvancedSectionProps) {
-  const [pwshPath, setPwshPath] = useState(settings.advanced.pwshPath)
+  const [helperPath, setHelperPath] = useState(settings.advanced.helperPath)
   const [restartBusy, setRestartBusy] = useState(false)
   const [restartError, setRestartError] = useState('')
   const [previewBusy, setPreviewBusy] = useState(false)
@@ -45,9 +45,21 @@ export function AdvancedSection({
   const [logsOpen, setLogsOpen] = useState(false)
   const [logs, setLogs] = useState<LogState>({ status: 'loading', text: '', path: '', error: '' })
 
-  const detectedPwsh = state.platform.pwsh !== ''
-    ? t('advanced.pwshDetected', { path: state.platform.pwsh })
-    : t('advanced.pwshHint')
+  // Tolerate a stale host half while the plugin update is still hot-reloading.
+  const legacyPwsh = (state.platform as { pwsh?: unknown }).pwsh
+  const helperKind = state.platform.helperKind
+    ?? (state.platform.os === 'win32' ? 'powershell' : state.platform.os === 'darwin' ? 'swift' : 'none')
+  const detectedHelper = typeof state.platform.helper === 'string'
+    ? state.platform.helper
+    : typeof legacyPwsh === 'string' ? legacyPwsh : ''
+  const isWindowsHelper = helperKind === 'powershell'
+  const helperLabel = isWindowsHelper ? t('advanced.pwsh') : t('advanced.helperPath')
+  const helperHint = detectedHelper !== ''
+    ? t('advanced.pwshDetected', { path: detectedHelper })
+    : isWindowsHelper ? t('advanced.pwshHint') : t('advanced.helperPathHint')
+  const helperPlaceholder = isWindowsHelper
+    ? t('advanced.pwshPlaceholder')
+    : t('advanced.helperPathPlaceholder')
 
   const runRestart = async (): Promise<void> => {
     setRestartBusy(true)
@@ -89,16 +101,16 @@ export function AdvancedSection({
 
   return (
     <SectionCard title={t('advanced.title')} desc={t('advanced.desc')}>
-      <FieldRow label={t('advanced.pwsh')} hint={detectedPwsh}>
+      <FieldRow label={helperLabel} hint={helperHint}>
         <Input
           className="sa-input-wide"
-          value={pwshPath}
-          aria-label={t('advanced.pwsh')}
-          placeholder={t('advanced.pwshPlaceholder')}
+          value={helperPath}
+          aria-label={helperLabel}
+          placeholder={helperPlaceholder}
           onChange={(event) => {
             const next = event.currentTarget.value
-            setPwshPath(next)
-            update({ advanced: { pwshPath: next } })
+            setHelperPath(next)
+            update({ advanced: { helperPath: next } })
           }}
         />
       </FieldRow>

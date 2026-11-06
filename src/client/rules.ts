@@ -143,8 +143,22 @@ export function createCustomAction(order = 0): ActionSettings {
   }
 }
 
+/** Modifier names accepted in a shortcut; macOS adds Control, Option and Command aliases. */
+const SHORTCUT_MODIFIERS: ReadonlySet<string> = new Set([
+  'ctrl',
+  'control',
+  'alt',
+  'option',
+  'opt',
+  'shift',
+  'command',
+  'cmd',
+  'meta',
+])
+
 /**
- * Validate the shortcut text: Ctrl/Alt/Shift is mandatory, plus exactly one letter key.
+ * Validate the shortcut text: at least one modifier (Ctrl/Control, Alt/Option,
+ * Shift, Command/Cmd/Meta) plus exactly one letter key.
  * @param value - shortcut text such as `Ctrl+Alt+Q`.
  * @returns whether the host can register the combination.
  */
@@ -158,7 +172,7 @@ export function isValidShortcut(value: string): boolean {
   let letters = 0
   for (const part of parts) {
     const lower = part.toLowerCase()
-    if (lower === 'ctrl' || lower === 'control' || lower === 'alt' || lower === 'shift') {
+    if (SHORTCUT_MODIFIERS.has(lower)) {
       modifiers += 1
       continue
     }

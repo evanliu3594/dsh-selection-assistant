@@ -1,13 +1,15 @@
 {
   "name": "dsh-selection-assistant",
-  "version": "0.1.0",
-  "description": "Global selection assistant for DeepSeek Harness: select text in any Windows app, hold Ctrl, and run DeepSeek actions from a floating toolbar.",
+  "version": "0.2.0",
+  "description": "Global selection assistant for DeepSeek Harness: select text in any Windows or macOS app, hold Ctrl (Control on macOS), and run DeepSeek actions from a floating toolbar.",
   "keywords": [
     "deepseek-harness",
     "dsh-plugin",
     "selection-assistant",
     "translate",
     "windows",
+    "macos",
+    "swift",
     "global-hook"
   ],
   "license": "MIT",
@@ -46,6 +48,9 @@
     "verify": "node scripts/verify-host.mjs",
     "verify:client": "node scripts/verify-client-bundle.mjs",
     "verify:helper": "node scripts/verify-helper-resolve.mjs",
+    "verify:helper:macos": "node scripts/verify-macos-helper.mjs",
+    "verify:host:macos": "node scripts/verify-host-macos.mjs",
+    "build:mac-helper": "sh scripts/build-macos-helper.sh",
     "probe": "node scripts/probe.mjs",
     "helper:test": "pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1"
   },

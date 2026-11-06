@@ -10,17 +10,20 @@ export interface TriggerSectionProps {
   t: Translate
   settings: Settings
   update: (patch: SettingsPatch) => void
+  /** Host platform id: `darwin` switches the modifier names to macOS. */
+  os: string
 }
 
 /**
  * Render the trigger card.
- * @param props - settings and the patch writer.
+ * @param props - settings, the patch writer, and the host platform.
  * @returns the card element.
  */
-export function TriggerSection({ t, settings, update }: TriggerSectionProps) {
+export function TriggerSection({ t, settings, update, os }: TriggerSectionProps) {
   const [shortcut, setShortcut] = useState(settings.trigger.shortcut)
   const [shortcutError, setShortcutError] = useState(false)
   const mode = settings.trigger.mode
+  const isMac = os === 'darwin'
 
   const changeMode = (next: TriggerMode): void => {
     update({ trigger: { mode: next } })
@@ -38,7 +41,7 @@ export function TriggerSection({ t, settings, update }: TriggerSectionProps) {
 
   const options: Array<{ value: TriggerMode; label: string }> = [
     { value: 'selection', label: t('trigger.selection') },
-    { value: 'ctrl', label: t('trigger.ctrl') },
+    { value: 'ctrl', label: t(isMac ? 'trigger.ctrlMac' : 'trigger.ctrl') },
     { value: 'shortcut', label: t('trigger.shortcut') },
   ]
 
@@ -60,10 +63,10 @@ export function TriggerSection({ t, settings, update }: TriggerSectionProps) {
         )}
         {mode === 'ctrl' && (
           <>
-            <p className="sa-row-hint">{t('trigger.ctrlHint')}</p>
+            <p className="sa-row-hint">{t(isMac ? 'trigger.ctrlHintMac' : 'trigger.ctrlHint')}</p>
             <SliderField
               label={t('trigger.longPress')}
-              hint={t('trigger.longPressHint')}
+              hint={t(isMac ? 'trigger.longPressHintMac' : 'trigger.longPressHint')}
               min={LIMITS.longPressMs.min}
               max={LIMITS.longPressMs.max}
               step={50}
@@ -80,12 +83,14 @@ export function TriggerSection({ t, settings, update }: TriggerSectionProps) {
                 className="sa-input"
                 value={shortcut}
                 aria-label={t('trigger.shortcutLabel')}
-                placeholder={t('trigger.shortcutPlaceholder')}
+                placeholder={t(isMac ? 'trigger.shortcutPlaceholderMac' : 'trigger.shortcutPlaceholder')}
                 onChange={(event) => { changeShortcut(event.currentTarget.value) }}
               />
             </FieldRow>
             {shortcutError && (
-              <p className="sa-field-error" role="alert">{t('trigger.shortcutInvalid')}</p>
+              <p className="sa-field-error" role="alert">
+                {t(isMac ? 'trigger.shortcutInvalidMac' : 'trigger.shortcutInvalid')}
+              </p>
             )}
           </>
         )}

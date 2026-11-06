@@ -43,9 +43,11 @@ const deps = {
   llm: { defaults: () => ({ provider: '', model: '', reasoningEffort: '' }), providers: async () => [], complete: async () => '' },
   helper: undefined,
   logger,
-  pwshPath: () => '',
+  helperPath: () => '',
+  helperKind: () => 'powershell',
   platformSupported: () => true,
   platformReason: () => '',
+  openPermissions: async () => {},
   onSettingsSaved: () => {},
 }
 let actionServer
@@ -62,7 +64,7 @@ actionServer = new ActionServer(deps)
 await actionServer.start()
 
 // (1) default discovery ------------------------------------------------------
-const candidates = await manager.resolvePwshCandidates()
+const candidates = await manager.resolveCandidates()
 check(Array.isArray(candidates) && candidates.length > 0, 'resolvePwshCandidates returned no candidate')
 check(candidates.at(-1) === 'pwsh', `last candidate is ${candidates.at(-1)}, expected the bare "pwsh" fallback`)
 const first = candidates[0]
@@ -92,21 +94,21 @@ const windowsApps = process.env.LOCALAPPDATA === undefined
   ? ''
   : `${process.env.LOCALAPPDATA}\\Microsoft\\WindowsApps\\pwsh.exe`
 if (windowsApps !== '') {
-  settings.patch({ advanced: { pwshPath: windowsApps } })
-  const explicitCandidates = await manager.resolvePwshCandidates()
+  settings.patch({ advanced: { helperPath: windowsApps } })
+  const explicitCandidates = await manager.resolveCandidates()
   check(explicitCandidates[0] === windowsApps, `explicit path is not first: ${explicitCandidates[0]}`)
 }
 
 // (4) Windows PowerShell 5.1 is rejected --------------------------------------
 const legacy = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
 if (existsSync(legacy)) {
-  settings.patch({ advanced: { pwshPath: legacy } })
-  const legacyCandidates = await manager.resolvePwshCandidates()
+  settings.patch({ advanced: { helperPath: legacy } })
+  const legacyCandidates = await manager.resolveCandidates()
   check(!legacyCandidates.some(candidate => candidate.toLowerCase().endsWith('powershell.exe')), 'legacy powershell.exe was accepted as a candidate')
 }
 
 // (5) config generation and actionable spawn failure --------------------------
-settings.patch({ advanced: { pwshPath: '' } })
+settings.patch({ advanced: { helperPath: '' } })
 let spawnError
 try {
   await manager.start()

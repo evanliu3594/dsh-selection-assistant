@@ -10,7 +10,7 @@
  *
  *   node scripts/verify-host.mjs
  */
-import { existsSync, readFileSync, rmSync, appendFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import http from 'node:http'
 import { resolve } from 'node:path'
@@ -42,6 +42,7 @@ const {
   buildActionPrompt,
   interpretChunk,
   createDefaultSettings,
+  helperKindForPlatform,
   PREVIEW_TEXT,
 } = mod
 
@@ -82,6 +83,10 @@ const helperStub = {
   },
   scriptPresent: true,
   pwshPath: 'C:/Program Files/PowerShell/7/pwsh.exe',
+  getPermissions: () => ({ accessibility: 'unknown' }),
+  setAccessibility: granted => {
+    helperStub.calls.push(`accessibility:${String(granted)}`)
+  },
   markReady: () => {
     helperStub.calls.push('ready')
   },
@@ -108,6 +113,24 @@ const helperStub = {
 }
 rmSync(dataDir, { recursive: true, force: true })
 trace('settings store done')
+
+// (1b) platform dispatch + 0.1 -> 0.2 settings migration
+{
+  check(helperKindForPlatform('win32') === 'powershell', 'win32 must use the PowerShell helper')
+  check(helperKindForPlatform('darwin') === 'swift', 'darwin must use the Swift helper')
+  check(helperKindForPlatform('linux') === 'none', 'unsupported platforms must report kind=none')
+  const legacyDir = resolve(dataDir, 'legacy')
+  mkdirSync(legacyDir, { recursive: true })
+  writeFileSync(
+    resolve(legacyDir, 'settings.json'),
+    JSON.stringify({ version: 1, advanced: { pwshPath: 'C:\\Tools\\pwsh.exe', logLevel: 'debug' } }),
+    'utf8',
+  )
+  const legacy = new SettingsStore(legacyDir)
+  check(legacy.get().advanced.helperPath === 'C:\\Tools\\pwsh.exe', 'pwshPath did not migrate to helperPath')
+  rmSync(legacyDir, { recursive: true, force: true })
+}
+trace('platform + migration done')
 
 // (2) prompt + chunk logic
 {
@@ -148,9 +171,13 @@ const deps = {
   llm,
   helper: helperStub,
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, setLevel: () => {}, log: () => {}, path: 'x' },
-  pwshPath: () => helperStub.pwshPath,
+  helperPath: () => helperStub.pwshPath,
+  helperKind: () => 'powershell',
   platformSupported: () => true,
   platformReason: () => '',
+  openPermissions: async () => {
+    helperStub.calls.push('open-permissions')
+  },
   onSettingsSaved: () => {},
 }
 
@@ -201,7 +228,9 @@ async function postJson(path, body) {
   check(state.status === 200 && state.body.ok === true, 'GET state did not succeed')
   check(state.body.state?.settings?.trigger?.mode === 'ctrl', 'state settings missing')
   check(state.body.state?.helper?.status === 'running', 'state helper status missing')
-  check(state.body.state?.platform?.pwsh !== '', 'state platform pwsh missing')
+  check(state.body.state?.platform?.helper !== '', 'state platform helper path missing')
+  check(state.body.state?.platform?.helperKind === 'powershell', 'state platform helperKind missing')
+  check(state.body.state?.platform?.permissions?.accessibility === 'unknown', 'state platform permissions missing')
   check(state.body.state?.defaults?.provider === 'deepseek-account', 'state defaults missing')
   check(state.body.state?.version === '0.1.0-test', 'state version missing')
 
@@ -229,6 +258,9 @@ async function postJson(path, body) {
 
   const restart = await postJson('/selection-assistant/helper/restart', {})
   check(restart.status === 200 && helperStub.calls.includes('restart'), 'POST helper/restart failed')
+
+  const permissions = await postJson('/selection-assistant/helper/open-permissions', {})
+  check(permissions.status === 200 && helperStub.calls.includes('open-permissions'), 'POST helper/open-permissions failed')
 
   const logs = await getJson('/selection-assistant/logs?lines=50')
   check(logs.status === 200 && logs.body.ok === true && typeof logs.body.text === 'string', 'GET logs failed')
@@ -262,6 +294,15 @@ async function postJson(path, body) {
   const status = await call('POST', '/v1/status', auth, JSON.stringify({ state: 'ready' }))
   check(status.status === 200, 'POST /v1/status failed')
   check(helperStub.calls.includes('ready'), 'status=ready did not reach the helper manager')
+
+  const statusPermission = await call(
+    'POST',
+    '/v1/status',
+    auth,
+    JSON.stringify({ state: 'ready', permissions: { accessibility: true } }),
+  )
+  check(statusPermission.status === 200, 'POST /v1/status with permissions failed')
+  check(helperStub.calls.includes('accessibility:true'), 'permissions.accessibility did not reach the helper manager')
 
   const log = await call('POST', '/v1/log', auth, JSON.stringify({ level: 'warn', message: 'hello' }))
   check(log.status === 200, 'POST /v1/log failed')

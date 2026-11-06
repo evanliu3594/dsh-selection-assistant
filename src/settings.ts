@@ -134,6 +134,9 @@ export function sanitizeSettings(raw: unknown): Settings {
   const language = isRecord(value.language) ? value.language : {}
   const appFilter = isRecord(value.appFilter) ? value.appFilter : {}
   const advanced = isRecord(value.advanced) ? value.advanced : {}
+  // 0.2 renamed pwshPath to helperPath. Honor the old key only when the new one
+  // is absent, so clearing helperPath does not resurrect a stale PowerShell path.
+  const helperPathRaw = 'helperPath' in advanced ? advanced.helperPath : advanced.pwshPath
   return {
     version: SETTINGS_VERSION,
     enabled: typeof value.enabled === 'boolean' ? value.enabled : defaults.enabled,
@@ -187,7 +190,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     },
     actions: sanitizeActions(value.actions),
     advanced: {
-      pwshPath: text(advanced.pwshPath, defaults.advanced.pwshPath, 500),
+      helperPath: text(helperPathRaw, defaults.advanced.helperPath, 500),
       logLevel: oneOf(advanced.logLevel, ['error', 'warn', 'info', 'debug'], defaults.advanced.logLevel),
     },
   }

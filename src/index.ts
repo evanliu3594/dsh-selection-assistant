@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { SettingsStore } from './settings.js'
 import { LlmBridge, type DefaultModelServiceLike, type LlmServiceLike } from './llm.js'
-import { BUNDLE_VERSION, HelperManager, type SubprocessServiceLike } from './helper.js'
+import { BUNDLE_VERSION, HelperManager, openAccessibilitySettings, type SubprocessServiceLike } from './helper.js'
 import { ActionServer, createSettingsHandler, type ServerDeps, type WebServerLike } from './server.js'
 import { PluginLogger } from './log.js'
 import { ROUTE_PREFIX, type HelperStatus, type Settings } from './contract.js'
@@ -31,7 +31,9 @@ export const inject: string[] = []
 export interface Config {
   /** Overrides `<DSH_HOME>/selection-assistant`. */
   dataDir?: string
-  /** Fallback `pwsh.exe` path; an explicit setting still wins. */
+  /** Fallback helper executable path; an explicit setting still wins. */
+  helperPath?: string
+  /** Pre-0.2 name of {@link helperPath}; kept for existing profiles. */
   pwshPath?: string
 }
 
@@ -98,13 +100,21 @@ export function apply(rawCtx: unknown, config: Config = {}): void {
     llm,
     helper: undefined as unknown as HelperManager,
     logger,
-    pwshPath: () => helperManager?.pwshPath ?? '',
-    platformSupported: () => process.platform === 'win32' && (helperManager?.scriptPresent ?? false),
+    helperPath: () => helperManager?.executablePath ?? '',
+    helperKind: () => helperManager?.kind ?? 'none',
+    platformSupported: () => helperManager?.kind !== 'none' && (helperManager?.scriptPresent ?? false),
     platformReason: () => {
-      if (process.platform !== 'win32') return '划词助手目前只支持 Windows。'
-      if (helperManager?.scriptPresent !== true) return '插件包内缺少 helper/SelectionAssistant.ps1。'
-      return ''
+      if (helperManager?.kind === 'powershell') {
+        if (helperManager.scriptPresent !== true) return '插件包内缺少 helper/SelectionAssistant.ps1。'
+        return ''
+      }
+      if (helperManager?.kind === 'swift') {
+        if (helperManager.scriptPresent !== true) return '插件包内缺少 helper/macos/Sources。'
+        return ''
+      }
+      return '划词助手支持 Windows 10/11 与 macOS 13.1 及以上。'
     },
+    openPermissions: () => openAccessibilitySettings(),
     onSettingsSaved: (next: Settings) => {
       logger.setLevel(next.advanced.logLevel)
       llm.invalidate()
@@ -120,7 +130,7 @@ export function apply(rawCtx: unknown, config: Config = {}): void {
     getSettings: () => settings.get(),
     getSubprocess: () => readService<SubprocessServiceLike>(ctx, 'subprocess'),
     getEndpoint: () => actionServer?.endpoint,
-    pwshPathOverride: config.pwshPath,
+    helperPathOverride: config.helperPath ?? config.pwshPath,
     onStatusChange: (status: HelperStatus) => {
       if (status.status === 'error' && status.lastError !== undefined) logger.warn(`helper status error: ${status.lastError}`)
     },
@@ -182,7 +192,7 @@ export function apply(rawCtx: unknown, config: Config = {}): void {
 export { SettingsStore, sanitizeSettings, mergePatch } from './settings.js'
 export { createDefaultSettings } from './contract.js'
 export { LlmBridge, buildActionPrompt, interpretChunk, toLlmError } from './llm.js'
-export { HelperManager, BUNDLE_VERSION } from './helper.js'
+export { HelperManager, BUNDLE_VERSION, helperKindForPlatform, openAccessibilitySettings } from './helper.js'
 export { ActionServer, buildState, createSettingsHandler, settingsRoutePaths } from './server.js'
 export { PluginLogger } from './log.js'
 export { PREVIEW_TEXT, ROUTE_PREFIX } from './contract.js'

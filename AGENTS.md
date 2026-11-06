@@ -9,8 +9,10 @@
 | `src/` | 宿主半体：设置持久化、模型桥、助手进程管理、两个 HTTP 面 | 见 `src/` 内注释与 `references/contracts.md` |
 | `src/client/` | 浏览器半体：DSH 设置页「划词助手」 | `references/contracts.md` §3 |
 | `helper/` | Windows 助手进程（PowerShell 7 + WPF）：全局钩子、取词、工具栏、结果窗 | `helper/README.md` |
-| `scripts/` | 构建与五面验证脚本（esbuild CLI、探针、宿主/浏览器/助手解析验证） | 本文件 §4 |
+| `helper/macos/` | macOS 助手进程（Swift + AppKit）：事件 tap、取词、工具栏、结果窗 | `helper/macos/README.md` |
+| `scripts/` | 构建与验证脚本（esbuild CLI、swiftc、探针、宿主/浏览器/助手验证） | 本文件 §4 |
 | `lib/` | 构建产物：`lib/index.js`（宿主）、`lib/client.js`（浏览器） | 只由 `node scripts/build.mjs` 生成 |
+| `helper/macos/bin/` | macOS 助手编译产物（gitignored，首次启动时由宿主构建） | `scripts/build-macos-helper.sh` |
 | `references/` | 接口契约、Cherry Studio 对照研究、验证记录 | `contracts.md` 是接口唯一出处 |
 | `diagnosis/` | 归档的一次性排查脚本 | `diagnosis/deprecated/README.md` |
 | `handoff/` | 会话交接记录 | 最新一份 = 当前状态入口 |
@@ -19,20 +21,20 @@
 
 ## 1. 目标
 
-让用户在**任意 Windows 软件**里选中文字后长按 Ctrl，弹出划词工具栏，一键调用 DSH 当前配置的 DeepSeek 模型完成翻译、解释、总结、搜索、复制等动作。形态、动作集合与设置方式参考 Cherry Studio 的 selection-assistant；模型服务默认来自 DeepSeek（通过 DSH 的 `ctx.llm`，不另存 API Key）。
+让用户在**任意 Windows 或 macOS 软件**里选中文字后长按 Ctrl（macOS 为 Control），弹出划词工具栏，一键调用 DSH 当前配置的 DeepSeek 模型完成翻译、解释、总结、搜索、复制等动作。形态、动作集合与设置方式参考 Cherry Studio 的 selection-assistant；模型服务默认来自 DeepSeek（通过 DSH 的 `ctx.llm`，不另存 API Key）。
 
 ## 2. 架构（已拍板）
 
 | # | 决策 | 理由 |
 |---|---|---|
 | ① | 宿主半体运行在 DSH Host 的 Node 子进程，**不碰 Electron** | 实测 `dsh-desktop-host` 用 fork 启动运行时，插件拿不到 `BrowserWindow` |
-| ② | 悬浮工具栏/结果窗由独立 helper 进程提供 | 只有独立进程能跨应用置顶；helper 用 PowerShell 7 + WPF 实现 |
-| ③ | 取词只用剪贴板路径：保存 → Ctrl+C → 读 → 还原 | 无 UIA、无截屏，权限与隐私成本最低 |
+| ② | 悬浮工具栏/结果窗由独立 helper 进程提供 | 只有独立进程能跨应用置顶；Windows 用 PowerShell 7 + WPF，macOS 用 Swift + AppKit |
+| ③ | 取词只用剪贴板路径：保存 → 复制快捷键 → 读 → 还原 | 无 UIA、无截屏，权限与隐私成本最低；Windows 为 Ctrl+C，macOS 为 ⌘C |
 | ④ | 模型调用走 `ctx.llm.prepareCall()/stream()`，默认跟随 `agentDefaultModel` | 复用 DSH 的 DeepSeek 账号与模型路由，零凭据 |
-| ⑤ | 设置存 `<DSH_HOME>/selection-assistant/settings.json`，不走 plugin row config | 保存设置不应触发插件重启；row config 只留 dataDir/pwshPath 两个引导项 |
+| ⑤ | 设置存 `<DSH_HOME>/selection-assistant/settings.json`，不走 plugin row config | 保存设置不应触发插件重启；row config 只留 dataDir/helperPath 两个引导项（旧 pwshPath 兼容） |
 | ⑥ | helper ↔ 宿主用回环 HTTP + 每次启动随机 token；SSE 流式 | helper 不依赖 DSH 鉴权，宿主不依赖 helper 内部结构 |
 | ⑦ | 每个动作一次独立模型调用，temperature 全局 | 与 Cherry 一致；暂不做多轮会话 |
-| ⑧ | Windows only | 钩子与 WPF 都是 Windows 能力；非 Windows 时插件不崩，设置页显示原因 |
+| ⑧ | 双平台：Windows 10/11 + macOS 13.1+ | 两个平台各有原生助手；其他系统插件不崩，设置页显示原因。macOS 需要辅助功能授权 |
 | ⑨ | 不做「引用到 DSH 会话」与「Ask Agent」 | 需要 DSH 会话写入通道，超出本次范围；README 已写明 |
 
 ## 3. 接口与文件归属
@@ -41,21 +43,30 @@
 - 新增/修改任何跨进程字段：先改 `references/contracts.md`，再改 `src/contract.ts`，最后改两端实现。
 - 默认动作（6 个）：translate / explain / summarize / search / copy 启用，optimize 关闭；自定义动作上限 20，工具栏直显上限 8。
 
-## 4. 构建与验证（五道门，缺一有盲区）
+## 4. 构建与验证（双平台，缺一有盲区）
 
-```powershell
+```bash
+# 两端通用
 node scripts/build.mjs                  # esbuild CLI；改完 src/ 必须重跑
 node scripts/probe.mjs                  # 宿主产物：裸导入、冷上下文 apply、settings.json 生成
-node scripts/verify-host.mjs            # 宿主：设置夹紧/落盘、全部路由、回环 SSE、鉴权、错误帧
+node scripts/verify-host.mjs            # 宿主：设置夹紧/落盘、全部路由（含权限路由）、回环 SSE、鉴权、错误帧
 node scripts/verify-client-bundle.mjs   # 浏览器：注册 id、模块表、settings.section、locale、行内提示换行守卫
+
+# Windows
 node scripts/verify-helper-resolve.mjs  # 助手解析：pwsh 候选、拒绝 PS 5.1、helper-config 字段
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1   # 助手：mock 宿主 + 按钮点击 + 截图 + 钩子层
+
+# macOS
+sh scripts/build-macos-helper.sh        # swiftc 编译 app（首次启动时宿主也会自动调用）
+node scripts/verify-macos-helper.mjs    # 编译 + 自测截图 + mock 宿主 SSE + LaunchServices + 健康退出
+node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预览 SSE + 停止回收
 ```
 
 - 本机 shell 沙箱会拦 Node 的 piped-stdio 子进程，所以构建走 esbuild CLI + `spawnSync(stdio:'inherit')`；不要改用 esbuild JS API。
-- 在 DSH shell 里跑 `verify-host.mjs` 若出现挂起（loopback 与端点交互的沙箱限制），改用 `Start-Process node ... -RedirectStandardOutput` 方式执行；脚本自身以 `process.exit` 收尾。
+- 在 DSH shell 里跑 `verify-host.mjs` 若出现挂起（loopback 与端点交互的沙箱限制），改用后台方式执行；脚本自身以 `process.exit` 收尾。
 - 浏览器半体没有浏览器内点击验证：产物注册面 + jsdom 冒烟已覆盖，视觉验收留给用户。
-- 全局钩子的真实注入需交互式桌面会话：`helper/selftest.ps1 -RequireRealHook`。agent 会话为低完整性令牌，普通 selftest 该项 SKIP。
+- Windows 全局钩子的真实注入需交互式桌面会话：`helper/selftest.ps1 -RequireRealHook`。agent 会话为低完整性令牌，普通 selftest 该项 SKIP。
+- macOS 的辅助功能授权无法由 agent 代授予：自动验证覆盖编译、窗口渲染、SSE、LaunchServices 启动与健康退出；真实拖选取词与 ⌘C 需人工在系统设置授权后验收。
 - 安装后的完整链路验证记录见 `references/verification.md`。
 
 ## 5. 规则
@@ -64,30 +75,33 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1   # 助手：m
 - 面向用户的文案中文（或按 UI locale 双语）；日志写文件，不写凭据与剪贴板内容。
 - 不修改 DSH 本体的 profile `package.json` / `cordis.patch.yml`，安装走 `plugin_manager install_bundle` 或 `dsh plugin add`。
 - helper 进程只由宿主拉起与回收；stdin 关闭 = 宿主退出，helper 必须退出。
+- macOS 助手打包为 `helper/macos/bin/SelectionAssistant.app`，宿主用 LaunchServices（`open`）启动；直接 spawn 内层二进制的授权会算到 DSH 头上，不要改成 spawn。源码改动会让宿主在下次启动时重新编译；产物不提交。重新编译会改变 ad-hoc 签名，辅助功能授权可能需要重新添加。
+- macOS 没有 stdin 管道：助手每 2 秒请求宿主 `/v1/health`，连续 3 次失败即退出；宿主按 `helper-state.json` 的 pid 发 SIGTERM 停止。Windows 仍用 stdin EOF。
 - 文档语言直白、先结论后证据；不出现「不是……而是……」句式。
 - 未知字段、越界数值一律在宿主侧夹紧，不信任 settings.json 与请求体。
 - 公开仓库包含源码、构建产物、验证脚本、用户文档、设计文档（`references/`）与 `AGENTS.md`；`handoff/`、`diagnosis/`、`helper/preview/` 由 `.gitignore` 排除，不进入 git tree。发布前在临时副本里 `git init` + `git add -A` 核对 tracked 集合与泄漏。
 
 ## 6. 当前状态
 
-0.1.0 已交付并安装进 desktop profile（`link:` 指向本目录）。验证结果：
+0.2.0 双平台开发分支为 `feat/macos-support`，尚未合并到 `main`，尚未安装进 desktop profile。Windows 0.1.0 的行为与验证基线保留；macOS 新增 Swift 助手。
 
-- 宿主产物、7 条设置路由、回环 SSE、鉴权与错误帧：PASS（`scripts/verify-host.mjs`）。
-- 浏览器产物注册与 locale：PASS（`scripts/verify-client-bundle.mjs`）。
-- 设置页布局守卫：PASS（构建产物含 `.sa-row-text` 的 `flex:1 1 auto` 与 `.sa-row-hint` 的换行规则）。
-- 助手解析（PowerShell 7 候选可启动）与 helper-config：PASS（`scripts/verify-helper-resolve.mjs`）。
-- 助手自测：PASS=21 SKIP=1 FAIL=0（SKIP 为低完整性沙箱下的真实 SendInput 注入）。
-- 工具栏按钮点击链路：PASS（`-SelfTest` 用真实 WPF 路由事件点击「翻译」，断言结果窗打开）。
-- 结果窗 pin 按钮：PASS（`-SelfTest` 点击 pin 两次，断言钉住/取消钉住与 Topmost）。
-- 高级区提示换行：PASS（构建守卫 + 文本宽度计算 + 运行实例发布确认）。
-- 应用图标：白底圆角、黑色虚线选区框 + 鼠标指针；XML 合法，30px/36px 下可辨认，深浅主题有对比。
-- 真实 DeepSeek 流式翻译经已安装插件跑通（1.1s，meta/delta/done 完整）。
-- 待人工验收：真实动作按钮点击、结果窗 pin 按钮真实鼠标点击与保持可见、设置页高级区提示换行的真实像素、设置页视觉、深色主题、多屏混合 DPI。
+macOS 验证结果（2026-11-06，macOS 27.2 arm64、Swift 6.4.2）：
 
-注意：仓库只发布 0.1.0，开发期的内部迭代编号已并入该版本。浏览器半体更新后重新构建 `lib/` 并刷新设置页即可（运行中的 DSH 带 client-hmr，通常不需要重启 DSH）；宿主 `src/` 更新后仍必须完整重启 DSH；helper 脚本更新后重启助手进程；图标元数据在 DSH 加载插件时读取，重启 DSH 或重新加载插件后显示新图标。
+- 构建：`sh scripts/build-macos-helper.sh` PASS（arm64 13.1，624016 字节）；`--universal` PASS（arm64 + x86_64，1231712 字节）。
+- 助手自测：PASS；`ok/clicked/pinToggled/resizeOk/done` 全 true；工具栏与结果窗离屏截图正常。
+- 助手端到端：`node scripts/verify-macos-helper.mjs` PASS（LaunchServices 启动、权限 error 帧、预览 SSE、截图、健康退出）。
+- 宿主管线：`node scripts/verify-host-macos.mjs` PASS（真实 HelperManager 自动构建、UserDefaults 配置、预览动作、SIGTERM 回收）。
+- 通用门：`probe`、`verify-host`、`verify-client-bundle` PASS；`verify-host` 覆盖 helperPath 迁移、平台分派、权限帧与 8 条设置路由。
+- 权限归属：`open` 启动的 app 的 responsible pid 是自己、AX trust=false；直接 spawn 内层二进制时 responsible 是 DSH、trust=true。方案有效。
+- 视觉抽查：浅色工具栏（普通/紧凑+溢出）、结果窗、Markdown、底栏、pin、缩放柄与 Windows 版一致；深色主题未截图验收。
+- 待人工验收：辅助功能授权后的真实拖选/长按 Control/⌘C、应用过滤、pin 与失焦关闭、深色主题、多屏/混合 DPI、Intel 实机、设置页真实视觉、真实 DeepSeek 端到端。
+
+注意：macOS 辅助功能授权无法由 agent 代授予。重新编译 app 会改变 ad-hoc 签名，授权可能需要重新勾选。宿主 `src/` 改动后必须完整重启 DSH；macOS 助手源码改动后宿主下次启动会重新编译 app；浏览器半体更新后重建 `lib/` 并刷新设置页。
 
 ## 7. 参考
 
 - 接口契约：`references/contracts.md`
+- Windows 助手：`helper/README.md`
+- macOS 助手：`helper/macos/README.md`
 - Cherry Studio 对照研究：`references/cherry-studio-selection-assistant.md`
-- DSH 插件开发：skill `cordis-plugin-development。
+- DSH 插件开发：skill `cordis-plugin-development`。
