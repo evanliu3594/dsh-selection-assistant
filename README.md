@@ -53,7 +53,7 @@ dsh plugin --profile desktop add https://github.com/evanliu3594/dsh-selection-as
 macOS 需要「辅助功能」权限才能监听全局事件并发送 ⌘C。第一次启动时 helper 会弹出系统授权提示：
 
 1. 打开 系统设置 → 隐私与安全性 → 辅助功能；
-2. 勾选 `SelectionAssistant`（如果列表里没有，点 `+` 选择 `helper/macos/bin/SelectionAssistant.app`，不要选 app 里的内层二进制）；
+2. 勾选 `SelectionAssistant`（列表里可能显示为“划词助手”；如果列表里没有，点 `+` 选择 `helper/macos/bin/SelectionAssistant.app`，不要选 app 里的内层二进制）；
 3. 回到 DSH，状态卡应在 2 秒内变为「运行中」；没有变化时点「重启助手」。
 
 权限按「负责进程」判定：辅助功能授权属于 `SelectionAssistant.app` 自己，给 DeepSeek Harness 授权不会让助手获得权限。设置页状态卡提供「打开辅助功能设置」按钮。重新编译 helper 会改变 ad-hoc 签名，系统可能要求重新勾选。
@@ -144,7 +144,7 @@ macOS:   ~/.dsh/selection-assistant/
 |---|---|
 | 设置里没有「划词助手」入口 | 完整重启 DSH；设置页由启动时装配的浏览器产物提供，刷新页面不够 |
 | Windows 状态卡提示找不到 pwsh | 设置 → 高级 → 助手路径，填 `(Get-Command pwsh).Source` 的输出；或安装 PowerShell 7 |
-| macOS 状态卡提示「需要辅助功能权限」 | 点「打开辅助功能设置」，勾选 SelectionAssistant；不行就重启助手 |
+| macOS 状态卡提示「需要辅助功能权限」 | 点「打开辅助功能设置」，勾选 SelectionAssistant（可能显示“划词助手”）；不行就重启助手 |
 | macOS 状态卡提示无法构建助手 | 运行 `xcode-select --install`，装完点「重启助手」；或手动运行 `sh scripts/build-macos-helper.sh` 看编译错误 |
 | 状态卡为「错误」，助手 15 秒未就绪 | 设置 → 高级 → 查看日志；读数据目录下的 `helper.log` |
 | 长按没有反应 | 确认 DSH 正在运行、助手状态为「运行中」；Windows 管理员窗口需要同等权限；macOS 确认辅助功能已授权 |

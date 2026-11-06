@@ -153,8 +153,8 @@ struct AppStrings {
     var previewTranslate: String { en ? "Translate (preview)" : "翻译（预览）" }
     var accessibilityRequired: String {
         en
-            ? "Accessibility permission is required. Open System Settings → Privacy & Security → Accessibility and allow SelectionAssistant."
-            : "需要辅助功能权限：请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 SelectionAssistant。"
+            ? "Accessibility permission is required. Open System Settings → Privacy & Security → Accessibility and allow SelectionAssistant (it may appear as 划词助手)."
+            : "需要辅助功能权限：请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 SelectionAssistant（可能显示为“划词助手”）。"
     }
 }
 

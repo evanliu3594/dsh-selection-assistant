@@ -268,6 +268,11 @@ for (const [key, value, type] of [
   const write = spawnSync('/usr/bin/defaults', ['write', bundleId, key, `-${type}`, value], { encoding: 'utf8' })
   check(write.status === 0, `defaults write ${key} failed: ${write.stderr ?? ''}`)
 }
+// The selftest runs in the same dataDir and writes its own pid into
+// helper-state.json. Remove that state before launching the normal instance so
+// its single-instance guard does not mistake the finished selftest for a peer.
+rmSync(join(dataDir, 'helper-state.json'), { force: true })
+rmSync(join(dataDir, 'command.json'), { force: true })
 const launch = spawnSync('/usr/bin/open', ['-n', '-a', app], {
   cwd: dataDir,
   encoding: 'utf8',

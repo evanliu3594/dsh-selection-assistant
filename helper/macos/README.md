@@ -104,7 +104,7 @@ node scripts/verify-host-macos.mjs     # 真实 HelperManager 启动 app + 预�
 
 ## 已知限制
 
-- 辅助功能授权无法由脚本代授予；授权后的真实拖选、长按 Control、⌘C 取词需人工验收。
+- 辅助功能授权无法由脚本代授予；授权后的真实拖选、长按 Control、⌘C 取词需人工验收。System Settings 列表里可能显示为“划词助手”。
 - 重新编译会改变 ad-hoc 签名，System Settings 里的授权可能需要重新添加。
 - 深色主题、溢出菜单视觉、多屏混合 DPI 尚未逐项截图验收。
 - 取词依赖剪贴板；部分沙箱应用可能忽略模拟的 ⌘C。
