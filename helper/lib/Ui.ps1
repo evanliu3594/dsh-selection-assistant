@@ -1147,7 +1147,7 @@ function Show-ResultWindow {
     $ctx = $script:UI.Result
     if (-not $ctx) { return $null }
     [WindowUtil]::MakeToolWindow($ctx.Hwnd)
-    try { $win.Activate() } catch { }
+    try { [void]$win.Activate() } catch { }
     if ($Placement -and $null -ne $Placement['X'] -and $null -ne $Placement['Y']) {
         Set-ResultWindowPosition -Context $ctx -X ([int]$Placement['X']) -Y ([int]$Placement['Y'])
     } else {
