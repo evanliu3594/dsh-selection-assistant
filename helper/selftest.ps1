@@ -1,4 +1,4 @@
-# selftest.ps1 — headless self test for the dsh-selection-assistant Windows helper.
+﻿# selftest.ps1 — headless self test for the dsh-selection-assistant Windows helper.
 #
 #   pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1
 #   pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1 -RequireRealHook
@@ -24,16 +24,29 @@
 [CmdletBinding()]
 param(
     [switch]$RequireRealHook,
-    [switch]$KeepTemp
+    [switch]$KeepTemp,
+    # Explicit helper runtime; the default prefers pwsh and falls back to the
+    # interpreter running this script (Windows PowerShell 5.1).
+    [string]$PowerShellExe = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $script:Root = $PSScriptRoot
-$script:Pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+if ($PowerShellExe -ne '') {
+    $script:Pwsh = $PowerShellExe
+} else {
+    $pwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($pwshCommand) { $script:Pwsh = $pwshCommand.Source }
+    else { $script:Pwsh = (Get-Process -Id $PID).Path }
+}
 $script:Tmp = Join-Path $script:Root '.selftest'
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:Passes = 0
 $script:Skips = 0
+
+# Monotonic clock: Windows PowerShell 5.1 has no Environment.TickCount64.
+$script:Clock = [System.Diagnostics.Stopwatch]::StartNew()
+function Get-NowMs { return [long]$script:Clock.ElapsedMilliseconds }
 
 function Write-Pass([string]$Message) {
     $script:Passes++
@@ -93,7 +106,14 @@ function Invoke-HookTest {
     $csPath = Join-Path $script:Root 'lib\SelectionHook.cs'
     try {
         $cs = [System.IO.File]::ReadAllText($csPath, [System.Text.Encoding]::UTF8)
-        Add-Type -TypeDefinition $cs -ErrorAction Stop
+        if ($PSVersionTable.PSVersion.Major -lt 6) {
+            Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+            try { [System.Net.ServicePointManager]::Expect100Continue = $false } catch { }
+            try { [System.Net.ServicePointManager]::DefaultConnectionLimit = 10 } catch { }
+            Add-Type -TypeDefinition $cs -ReferencedAssemblies @('System.Net.Http') -ErrorAction Stop
+        } else {
+            Add-Type -TypeDefinition $cs -ErrorAction Stop
+        }
     } catch {
         Write-Fail ('SelectionHook.cs 编译失败: ' + $_.Exception.Message)
         return
@@ -205,6 +225,7 @@ $script:MockScript = @'
 param($State)
 
 function Read-HttpRequest($Stream) {
+    $crlf = [string]::Concat([char]13, [char]10)
     $buffer = New-Object byte[] 16384
     $data = New-Object System.Collections.Generic.List[byte]
     $headerEnd = -1
@@ -213,7 +234,7 @@ function Read-HttpRequest($Stream) {
         if ($n -le 0) { return $null }
         for ($i = 0; $i -lt $n; $i++) { $data.Add($buffer[$i]) }
         $text = [System.Text.Encoding]::ASCII.GetString($data.ToArray())
-        $idx = $text.IndexOf([string]::Concat([char]13, [char]10, [char]13, [char]10))
+        $idx = $text.IndexOf($crlf + $crlf)
         if ($idx -ge 0) { $headerEnd = $idx; break }
         if ($data.Count -gt 1048576) { return $null }
     }
@@ -364,8 +385,8 @@ function Start-MockHost {
     $ps.Runspace = $rs
     [void]$ps.AddScript($script:MockScript).AddParameter('State', $state)
     $handle = $ps.BeginInvoke()
-    $deadline = [Environment]::TickCount64 + 6000
-    while (-not $state.ready -and [Environment]::TickCount64 -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    $deadline = (Get-NowMs) + 6000
+    while (-not $state.ready -and (Get-NowMs) -lt $deadline) { Start-Sleep -Milliseconds 100 }
     if (-not $state.ready) {
         Write-Fail ('mock 宿主启动失败: ' + $state.serverError)
         try { $ps.Stop() } catch { }
@@ -435,7 +456,7 @@ function Invoke-UiSelfTest {
     try { $stderr = $child.ErrTask.Result } catch { }
     if (-not $child.Process.HasExited) {
         Write-Fail 'helper -SelfTest 40 秒内未退出'
-        try { $child.Process.Kill($true) } catch { }
+        try { $child.Process.Kill() } catch { }
         return
     }
     Write-Info ('helper -SelfTest exitCode=' + $child.Process.ExitCode)
@@ -510,8 +531,8 @@ function Invoke-LifecycleTest {
     $child = Start-Child -Arguments $args -CaptureInput
     try {
         $statusCountBefore = $script:Mock.State.statuses.Count
-        $deadline = [Environment]::TickCount64 + 20000
-        while ($script:Mock.State.statuses.Count -le $statusCountBefore -and [Environment]::TickCount64 -lt $deadline) {
+        $deadline = (Get-NowMs) + 20000
+        while ($script:Mock.State.statuses.Count -le $statusCountBefore -and (Get-NowMs) -lt $deadline) {
             Start-Sleep -Milliseconds 200
         }
         if ($script:Mock.State.statuses.Count -le $statusCountBefore) {
@@ -524,9 +545,9 @@ function Invoke-LifecycleTest {
         $cmdPath = Join-Path $dataDir 'command.json'
         $cmd = @{ id = [guid]::NewGuid().ToString(); type = 'preview'; text = '预览命令测试文字' } | ConvertTo-Json -Compress
         New-Utf8NoBom $cmdPath $cmd
-        $logDeadline = [Environment]::TickCount64 + 8000
+        $logDeadline = (Get-NowMs) + 8000
         $previewSeen = $false
-        while ([Environment]::TickCount64 -lt $logDeadline) {
+        while ((Get-NowMs) -lt $logDeadline) {
             foreach ($entry in $script:Mock.State.logs) {
                 if ($entry.body -match '预览命令已执行') { $previewSeen = $true; break }
             }
@@ -543,10 +564,10 @@ function Invoke-LifecycleTest {
             if ($child.Process.ExitCode -eq 0) { Write-Pass 'stdin 关闭后 helper 8 秒内退出，退出码 0' } else { Write-Fail ('stdin 关闭后退出码 ' + $child.Process.ExitCode + '（期望 0）') }
         } else {
             Write-Fail 'stdin 关闭后 helper 8 秒内未退出'
-            try { $child.Process.Kill($true) } catch { }
+            try { $child.Process.Kill() } catch { }
         }
     } finally {
-        if (-not $child.Process.HasExited) { try { $child.Process.Kill($true) } catch { } }
+        if (-not $child.Process.HasExited) { try { $child.Process.Kill() } catch { } }
         try { [void]$child.OutTask.Result } catch { }
         try { [void]$child.ErrTask.Result } catch { }
     }

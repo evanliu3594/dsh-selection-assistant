@@ -1,8 +1,8 @@
 # helper — Windows 划词助手进程
 
-PowerShell 7 + WPF 实现的独立助手进程。macOS 版本见 [helper/macos/README.md](macos/README.md)。
+PowerShell + WPF 实现的独立助手进程。优先使用 PowerShell 7；未安装时回退 Windows 自带的 Windows PowerShell 5.1，两个运行时共用同一份脚本。macOS 版本见 [helper/macos/README.md](macos/README.md)。
 
-宿主用下面的命令启动它：
+宿主用下面的命令启动它（Windows PowerShell 5.1 把 `pwsh` 换成 `powershell.exe`）：
 
 ```powershell
 pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <helper>\SelectionAssistant.ps1 -ConfigPath <dataDir>\helper-config.json
@@ -22,7 +22,15 @@ pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <helper>\Selection
 | `selftest.ps1` | 自测：钩子层、TcpListener mock 宿主、helper `-SelfTest`、截图校验、stdin 生命周期校验 |
 | `preview\toolbar.png`、`preview\result.png` | 自测生成的窗口截图，供人工检查渲染；本地生成，不随仓库提交 |
 
-分层原则：C# 只做原生调用和后台线程，所有 WPF 对象与状态机留在 PowerShell 主线程（Dispatcher 线程，pwsh 7 默认 STA）。钩子线程自己泵消息，回调只写 `ConcurrentQueue`；PowerShell 用 `DispatcherTimer`（40ms）消费，从不跨线程调用 PowerShell。
+分层原则：C# 只做原生调用和后台线程，所有 WPF 对象与状态机留在 PowerShell 主线程（Dispatcher 线程；`pwsh` 与 `powershell.exe` 默认 STA）。钩子线程自己泵消息，回调只写 `ConcurrentQueue`；PowerShell 用 `DispatcherTimer`（40ms）消费，从不跨线程调用 PowerShell。
+
+## 运行时兼容
+
+- 优先 PowerShell 7；没有 `pwsh` 时宿主回退到 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`（Windows 10/11 自带），按文件名识别并显示运行环境。
+- C# 通过 `Add-Type` 内存编译。Windows PowerShell 5.1 的编译器只支持 C# 5，`SelectionHook.cs` 必须保持 C# 5 语法（无字符串插值、`nameof`、表达式体成员、`out var` 等）。
+- Windows PowerShell 5.1 没有 `Environment.TickCount64`。C# 用 `Clock.NowMs`（`Stopwatch`）；PowerShell 用 `Get-NowMs`（入口脚本与自测脚本各一份）。
+- 5.1 的 `Add-Type` 需要显式引用 `System.Net.Http`，并在 PS 层关闭 `Expect: 100-continue`、把连接数设为 10；宿主解析与兜底逻辑在 `src/helper.ts`。
+- 三个 `.ps1` 保存为 UTF-8 with BOM，Windows PowerShell 5.1 才能正确读取中文；PowerShell 7 读取结果不变。
 
 ## 触发与取词
 
@@ -57,6 +65,8 @@ helper 自己写，字段：`version`、`pid`、`startedAt`、`resultX`、`resul
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper\selftest.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File helper\selftest.ps1 -PowerShellExe "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"  # 用 5.1 跑助手
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File helper\selftest.ps1  # 5.1 宿主 + 5.1 助手
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper\selftest.ps1 -RequireRealHook   # 沙箱外强制真实钩子测试
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper\selftest.ps1 -KeepTemp          # 保留临时目录便于排查
 ```

@@ -96,6 +96,9 @@ export function StatusCard({ t, settings, state, update, restart, openPermission
         {helperStatus === 'running' && typeof helper.pid === 'number' && (
           <span className="sa-muted">{t('status.pid', { pid: helper.pid })}</span>
         )}
+        {helperStatus === 'running' && typeof helper.runtime === 'string' && helper.runtime !== '' && (
+          <span className="sa-muted">{t('status.runtime', { runtime: helper.runtime })}</span>
+        )}
         {helper.restarts > 0 && (
           <span className="sa-muted">{t('status.restarts', { count: helper.restarts })}</span>
         )}

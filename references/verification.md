@@ -1,4 +1,4 @@
-# 验证记录 — dsh-selection-assistant（0.1.0 Windows / 0.2.0 双端 / 0.2.1 结果窗几何）
+# 验证记录 — dsh-selection-assistant（0.1.0 Windows / 0.2.0 双端 / 0.2.1 结果窗几何 / 0.2.2 双运行时）
 
 0.1.0 验证环境：Windows 11、DSH 桌面版 0.2.2-rc.1（desktop profile）、PowerShell 7.6.9、DSH 默认模型 `deepseek-account / deepseek-flash`。
 
@@ -263,3 +263,49 @@ Windows 仍待实机验收：pin 叠窗的真实鼠标交互、多屏混合 DPI�
 3. macOS 手动拖动/缩放后的位置保存与重启后恢复；Windows 已验证保存值与下一窗口沿用，重启后恢复未单独验证。
 4. 深色主题、溢出菜单、多屏/混合 DPI、Intel 实机。
 5. 真实 DeepSeek 端到端。
+
+## 11. 0.2.2 Windows PowerShell 5.1 兜底验证（2026-11-06）
+
+验证环境：Windows 11、PowerShell 7.6.9、Windows PowerShell 5.1.19041.6456、DSH 桌面版 0.2.2-rc.1。
+
+### 11.1 调研与改动
+
+调研先确认三个阻断：宿主 `isLegacyPowerShell()` 拒绝 `powershell.exe`；C# 的 `Environment.TickCount64`/`SocketsHttpHandler` 在 .NET Framework 4.8 不存在；三个 `.ps1` 为 UTF-8 无 BOM，5.1 按 ANSI 读取会改写中文字面量。另发现 PS 层 22 处 `[Environment]::TickCount64` 在 5.1 下静默返回 `$null`，会让长按、拖选延迟与 Toast 计时失效。
+
+实现：C# 增加 `Clock.NowMs`（`Stopwatch`）、HTTP 客户端改 `HttpClientHandler`；PS 层增加 `Get-NowMs`；`Add-Type` 增加 5.1 分支（`System.Net.Http` 引用与 `ServicePointManager` 两项设置）；三个脚本转 UTF-8 with BOM；`selftest.ps1` 增加 `-PowerShellExe`；宿主候选增加 5.1 兜底并在状态 DTO 发布 `runtime`；设置页状态卡显示运行环境。
+
+### 11.2 三组自测
+
+| 组 | 自测宿主 | 助手引擎 | 结果 |
+|---|---|---|---|
+| 1 | pwsh 7.6.9 | pwsh 7.6.9 | PASS=22 SKIP=1 FAIL=0，退出码 0 |
+| 2 | pwsh 7.6.9 | PS 5.1.19041.6456（`-PowerShellExe`） | PASS=22 SKIP=1 FAIL=0，退出码 0 |
+| 3 | PS 5.1.19041.6456 | PS 5.1.19041.6456 | PASS=22 SKIP=1 FAIL=0，退出码 0 |
+
+- 两运行时 `helper.log` 均无 ERROR；编译行分别为「PowerShell 7.6.9」与「PowerShell 5.1.19041.6456」。
+- 与 0.2.1 基线对比：22 条 PASS 断言逐条一致，含点击、pin、多窗口（旧窗保留、同尺寸、偏移 `-24,+24`）与几何断言。
+- 截图尺寸一致：工具栏 403×64、结果窗 524×424；5.1 工具栏 PNG 字节数多 91，来自字体栅格差异。
+
+### 11.3 静态与门禁
+
+| 项 | 结果 |
+|---|---|
+| 脚本编码 | 三个 `.ps1` 首字节 EF BB BF；PS7 与 5.1 解析均 0 错误 |
+| C# 5 约束 | 字符串插值、`nameof`、表达式体、`out var`、`?.` 等 0 命中；两运行时 `Add-Type` 均 PASS |
+| 时钟 | `[Environment]::TickCount64` 可执行调用 0 处；`Clock.NowMs` 单调 |
+| 候选顺序 | 默认 pwsh 在前、`powershell.exe` 兜底；显式 5.1 为第一候选；双运行时探测 7/7/5/5 |
+| 构建 | `node scripts/build.mjs` PASS；三产物 SHA256 重建前后一致 |
+| 门禁 | `probe`、`verify-host`、`verify-client-bundle`、`verify-helper-resolve` 全 PASS |
+
+### 11.4 实机安装与切换
+
+- `plugin_manager remove_bundle` + `install_bundle` 均 `application: applied`，运行实例 `version=0.2.2`，默认助手 `runtime=PowerShell 7`（pid 7584）。
+- 设置页路由把 `advanced.helperPath` 指向 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` 后，助手自动重启：`runtime=Windows PowerShell 5.1`、pid 10224、进程名 `powershell`，`全局钩子安装成功`。
+- 5.1 助手执行预览命令：`动作 translate 已发起请求`、`预览命令已执行`，无 ERROR。
+- 恢复 `helperPath` 为空后，助手回到 `runtime=PowerShell 7`、pid 26932、进程名 `pwsh`。
+
+### 11.5 未验证 / 人工验收
+
+1. 真实交互桌面下 5.1 助手的全局钩子与 SendInput（本次低完整性沙箱 SKIP，需 `-RequireRealHook` 普通会话）。
+2. 5.1 多屏混合 DPI、深色主题、pin 叠窗真实鼠标交互。
+3. 无 PowerShell 7 的干净机器上的完整安装链路（本次用显式路径模拟，解析逻辑已覆盖隐藏 pwsh 的候选测试）。

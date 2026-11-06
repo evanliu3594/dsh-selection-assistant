@@ -4,9 +4,13 @@
  * The sandbox denies Node's piped-stdio child processes, so this script does not
  * boot the helper through `HelperManager.start()` successfully here; instead it
  * proves the parts that can be proven sandboxed:
- *   - candidate resolution order (explicit setting → resolver → disk → bare pwsh)
- *   - the Windows PowerShell 5.1 binary is rejected
- *   - the resolved candidate is a launchable PowerShell 7 (spawn with inherited stdio)
+ *   - candidate order: explicit setting → pwsh resolver → disk pwsh → bare pwsh
+ *     → disk powershell.exe → bare powershell.exe
+ *   - PowerShell 7 is preferred; Windows PowerShell 5.1 is the fallback runtime
+ *   - an explicit Windows PowerShell 5.1 path is accepted as the first candidate
+ *   - both runtimes launch and report the expected major version (7 for pwsh,
+ *     5 for powershell.exe); the version is written to a file because piped
+ *     stdio is unavailable in the sandbox
  *   - the helper config the manager writes matches the contract
  *   - a spawn failure surfaces an actionable Chinese error instead of throwing
  *
@@ -17,12 +21,34 @@
  */
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const failures = []
 const check = (condition, message) => {
   if (!condition) failures.push(message)
+}
+
+/** Candidate names this gate actually launches: pwsh or powershell.exe. */
+const POWERSHELL_CANDIDATE = /pwsh(?:\.exe)?$|powershell\.exe$/i
+
+/** Expected major version for one interpreter path or bare command name. */
+function expectedMajor(candidate) {
+  return basename(candidate).toLowerCase() === 'powershell.exe' ? 5 : 7
+}
+
+/** Write one candidate's PowerShell major version to a file and read it back. */
+function probeMajor(candidate, dataDir, index) {
+  const versionFile = resolve(dataDir, `pwsh-version-${String(index)}.txt`)
+  rmSync(versionFile, { force: true })
+  const versionScript = `$PSVersionTable.PSVersion.Major | Set-Content -Encoding ascii '${versionFile.replace(/'/g, "''")}'`
+  const run = spawnSync(candidate, ['-NoProfile', '-NonInteractive', '-Command', versionScript], {
+    windowsHide: true,
+    stdio: 'ignore',
+    timeout: 30_000,
+  })
+  const major = existsSync(versionFile) ? Number.parseInt(readFileSync(versionFile, 'utf8').trim(), 10) : Number.NaN
+  return { status: run.status, error: run.error, major }
 }
 
 const dataDir = resolve(`.verify-resolve-${process.pid}`)
@@ -66,30 +92,31 @@ await actionServer.start()
 // (1) default discovery ------------------------------------------------------
 const candidates = await manager.resolveCandidates()
 check(Array.isArray(candidates) && candidates.length > 0, 'resolvePwshCandidates returned no candidate')
-check(candidates.at(-1) === 'pwsh', `last candidate is ${candidates.at(-1)}, expected the bare "pwsh" fallback`)
+check(candidates.at(-1) === 'powershell.exe', `last candidate is ${candidates.at(-1)}, expected the bare "powershell.exe" fallback`)
+check(candidates.includes('pwsh'), 'default candidates lost the bare "pwsh" fallback')
 const first = candidates[0]
 check(typeof first === 'string' && first !== '', 'first candidate is empty')
 console.log(`candidates: ${candidates.join(' | ')}`)
 
-// (2) the first candidate must actually launch PowerShell 7 -------------------
-// The sandbox forbids piped stdio, so the version is written to a file instead.
-const versionFile = resolve(dataDir, 'pwsh-version.txt')
-rmSync(versionFile, { force: true })
-const versionScript = `$PSVersionTable.PSVersion.Major | Set-Content -Encoding ascii '${versionFile.replace(/'/g, "''")}'`
-const probe = spawnSync(first, ['-NoProfile', '-NonInteractive', '-Command', versionScript], {
-  windowsHide: true,
-  stdio: 'ignore',
-  timeout: 30_000,
-})
-check(
-  probe.status === 0,
-  `launching ${first} failed (status=${String(probe.status)}, error=${probe.error?.message ?? 'none'})`,
-)
-const major = existsSync(versionFile) ? Number.parseInt(readFileSync(versionFile, 'utf8').trim(), 10) : Number.NaN
-check(major >= 7, `resolved PowerShell major version is ${String(major)}, expected 7+`)
-console.log(`resolved: ${first} (PowerShell ${String(major)})`)
+// (2) candidate order: every pwsh candidate must come before powershell.exe ---
+const firstPwsh = candidates.findIndex(candidate => /pwsh(?:\.exe)?$/i.test(candidate))
+const firstLegacy = candidates.findIndex(candidate => /powershell\.exe$/i.test(candidate))
+check(firstPwsh !== -1, 'default candidates have no PowerShell 7 candidate')
+check(firstLegacy !== -1, 'default candidates have no Windows PowerShell 5.1 candidate')
+check(firstPwsh < firstLegacy, `Windows PowerShell 5.1 is preferred over PowerShell 7 (pwsh index ${String(firstPwsh)}, powershell.exe index ${String(firstLegacy)})`)
+console.log(`order: pwsh@${String(firstPwsh)} before powershell.exe@${String(firstLegacy)}`)
 
-// (3) explicit WindowsApps alias is honored even when it cannot be stat-ted ---
+// (3) the first candidate must actually launch a supported PowerShell ---------
+// The sandbox forbids piped stdio, so the version is written to a file instead.
+const firstProbe = probeMajor(first, dataDir, 'first')
+check(
+  firstProbe.status === 0,
+  `launching ${first} failed (status=${String(firstProbe.status)}, error=${firstProbe.error?.message ?? 'none'})`,
+)
+check(firstProbe.major >= 5, `resolved PowerShell major version is ${String(firstProbe.major)}, expected 5+`)
+console.log(`resolved: ${first} (PowerShell ${String(firstProbe.major)})`)
+
+// (4) explicit WindowsApps alias is honored even when it cannot be stat-ted ---
 const windowsApps = process.env.LOCALAPPDATA === undefined
   ? ''
   : `${process.env.LOCALAPPDATA}\\Microsoft\\WindowsApps\\pwsh.exe`
@@ -99,16 +126,34 @@ if (windowsApps !== '') {
   check(explicitCandidates[0] === windowsApps, `explicit path is not first: ${explicitCandidates[0]}`)
 }
 
-// (4) Windows PowerShell 5.1 is rejected --------------------------------------
-const legacy = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+// (5) explicit Windows PowerShell 5.1 is accepted as the first candidate ------
+const legacy = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
 if (existsSync(legacy)) {
   settings.patch({ advanced: { helperPath: legacy } })
   const legacyCandidates = await manager.resolveCandidates()
-  check(!legacyCandidates.some(candidate => candidate.toLowerCase().endsWith('powershell.exe')), 'legacy powershell.exe was accepted as a candidate')
+  check(legacyCandidates[0] === legacy, `explicit powershell.exe is not first: ${legacyCandidates[0]}`)
+  console.log(`explicit 5.1: ${legacyCandidates[0]}`)
 }
 
-// (5) config generation and actionable spawn failure --------------------------
+// (6) both runtimes must launch and report their expected major version -------
 settings.patch({ advanced: { helperPath: '' } })
+const ordered = await manager.resolveCandidates()
+const probed = []
+for (const [index, candidate] of ordered.entries()) {
+  if (!POWERSHELL_CANDIDATE.test(candidate)) continue
+  const want = expectedMajor(candidate)
+  const result = probeMajor(candidate, dataDir, index)
+  check(
+    result.status === 0 && result.major === want,
+    `${candidate} reported PowerShell ${String(result.major)}, expected ${String(want)} (status=${String(result.status)})`,
+  )
+  probed.push(`${candidate} -> PowerShell ${String(result.major)}`)
+}
+check(probed.some(line => line.endsWith('PowerShell 7')), 'no candidate reported PowerShell 7')
+check(probed.some(line => line.endsWith('PowerShell 5')), 'no candidate reported PowerShell 5')
+console.log(`runtime probes: ${probed.join(' | ')}`)
+
+// (7) config generation and actionable spawn failure --------------------------
 let spawnError
 try {
   await manager.start()
@@ -117,7 +162,12 @@ try {
 }
 const status = manager.getStatus()
 check(status.status === 'error', `sandboxed start() should end in error, got ${status.status}`)
-check(typeof status.lastError === 'string' && status.lastError.includes('pwsh'), 'spawn failure message is not actionable')
+check(
+  typeof status.lastError === 'string'
+    && status.lastError.includes('pwsh.exe')
+    && status.lastError.includes('powershell.exe'),
+  'spawn failure message does not offer both helper paths',
+)
 if (spawnError !== undefined) {
   // A synchronous EPERM from the sandbox is expected here; it may also be caught
   // per-candidate and reflected only in the status message.
@@ -145,5 +195,5 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  ${failure}`)
   process.exit(1)
 }
-console.log('PASS: helper resolution and config verified')
+console.log('PASS: helper resolution and config verified (PowerShell 7 preferred, Windows PowerShell 5.1 fallback)')
 process.exit(0)

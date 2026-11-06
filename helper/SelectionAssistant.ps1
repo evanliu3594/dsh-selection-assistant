@@ -1,7 +1,8 @@
-# SelectionAssistant.ps1 — dsh-selection-assistant Windows helper process.
+﻿# SelectionAssistant.ps1 — dsh-selection-assistant Windows helper process.
 #
 # Launched by the DSH host:
 #   pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File SelectionAssistant.ps1 -ConfigPath <helper-config.json>
+#   powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File SelectionAssistant.ps1 -ConfigPath <helper-config.json>
 #
 # Responsibilities: global hooks, Ctrl long press / drag selection trigger,
 # clipboard capture, floating toolbar, streaming result window, host SSE client,
@@ -32,6 +33,16 @@ $script:SelectionText = ''
 $script:SelectionApp = ''
 $script:SuppressAutoClose = $false
 $script:PreviewStream = $null
+
+# Monotonic millisecond clock. [Environment]::TickCount64 only exists on
+# PowerShell 7 / .NET Core; Windows PowerShell 5.1 runs on .NET Framework and
+# silently returns $null for it, which breaks every duration check. The helper
+# owns its own Stopwatch so both runtimes share one implementation.
+$script:Clock = [System.Diagnostics.Stopwatch]::StartNew()
+function Get-NowMs {
+    if ($null -eq $script:Clock) { return [long]0 }
+    return [long]$script:Clock.ElapsedMilliseconds
+}
 
 $script:SampleText = 'DeepSeek Harness 是一个本地 AI 智能体运行环境。选中这段文字并长按 Ctrl，就能看到划词助手。'
 $script:PreviewSample = @"
@@ -91,7 +102,7 @@ function Write-Log {
 
 function Write-LogErrorSafe {
     param([string]$Message)
-    $now = [Environment]::TickCount64
+    $now = (Get-NowMs)
     if ($now - $script:LastErrorLogAt -lt 1500) { return }
     $script:LastErrorLogAt = $now
     Write-Log 'error' $Message
@@ -339,7 +350,7 @@ function Reset-TriggerState {
 
 function Test-SelectionCandidate {
     if (-not $script:Selection.Has) { return $false }
-    return ([Environment]::TickCount64 - $script:Selection.At) -le 5000
+    return ((Get-NowMs) - $script:Selection.At) -le 5000
 }
 
 function Test-PointInRect {
@@ -434,9 +445,9 @@ function On-HookEvent {
                     $script:Selection.Has = $true
                     $script:Selection.X = [int]$e.X
                     $script:Selection.Y = [int]$e.Y
-                    $script:Selection.At = [Environment]::TickCount64
+                    $script:Selection.At = (Get-NowMs)
                     if ($script:Cfg.trigger.mode -eq 'selection') {
-                        $script:PendingSelectionTrigger = [Environment]::TickCount64 + [int]$script:Cfg.trigger.captureDelayMs + 30
+                        $script:PendingSelectionTrigger = (Get-NowMs) + [int]$script:Cfg.trigger.captureDelayMs + 30
                     }
                 }
                 return
@@ -459,7 +470,7 @@ function On-HookEvent {
             if ($isCtrl) {
                 if ($e.Phase -eq 'down') {
                     $script:Ctrl.Down = $true
-                    $script:Ctrl.DownAt = [Environment]::TickCount64
+                    $script:Ctrl.DownAt = (Get-NowMs)
                     if ($script:Cfg.trigger.mode -eq 'ctrl' -and (Test-SelectionCandidate)) {
                         $script:Ctrl.Cancelled = $false
                     } else {
@@ -495,7 +506,7 @@ function Check-LongPress {
     if ($script:Cfg.trigger.mode -ne 'ctrl') { return }
     if (-not $script:Ctrl.Down -or $script:Ctrl.Cancelled) { return }
     if (-not $script:Selection.Has) { return }
-    $elapsed = [Environment]::TickCount64 - $script:Ctrl.DownAt
+    $elapsed = (Get-NowMs) - $script:Ctrl.DownAt
     if ($elapsed -ge [int]$script:Cfg.trigger.longPressMs) {
         $x = $script:Selection.X
         $y = $script:Selection.Y
@@ -505,7 +516,7 @@ function Check-LongPress {
 
 function Check-PendingSelectionTrigger {
     if ($script:PendingSelectionTrigger -le 0) { return }
-    if ([Environment]::TickCount64 -lt $script:PendingSelectionTrigger) { return }
+    if ((Get-NowMs) -lt $script:PendingSelectionTrigger) { return }
     $x = $script:Selection.X
     $y = $script:Selection.Y
     $script:PendingSelectionTrigger = 0
@@ -699,7 +710,7 @@ function Poll-Stream {
                         }
                         'done' {
                             $script:SelfTestState.Done = $true
-                            if (-not $script:SelfTestState.DoneAt) { $script:SelfTestState.DoneAt = [Environment]::TickCount64 }
+                            if (-not $script:SelfTestState.DoneAt) { $script:SelfTestState.DoneAt = (Get-NowMs) }
                             Set-ResultDone
                             Write-Log 'info' 'SSE done'
                         }
@@ -811,7 +822,7 @@ function Invoke-Preview {
 
 function Poll-CommandFile {
     if (-not $script:Cfg -or -not $script:Cfg.dataDir) { return }
-    $now = [Environment]::TickCount64
+    $now = (Get-NowMs)
     if ($now -lt $script:NextCommandPoll) { return }
     $script:NextCommandPoll = $now + 400
     $path = Join-Path $script:Cfg.dataDir 'command.json'
@@ -831,7 +842,7 @@ function Poll-CommandFile {
 function Poll-PreviewStream {
     if (-not $script:PreviewStream) { return }
     $ps = $script:PreviewStream
-    $now = [Environment]::TickCount64
+    $now = (Get-NowMs)
     if ($now -lt $script:NextPreviewTick) { return }
     $script:NextPreviewTick = $now + 90
     $remaining = $ps.Text.Length - $ps.Pos
@@ -913,7 +924,7 @@ function Save-SelfTestResult {
             resultShot      = $script:SelfTestState.ResultShot
             toolbarRect     = $script:SelfTestState.ToolbarRect
             resultRect      = $script:SelfTestState.ResultRect
-            durationMs      = [Environment]::TickCount64 - $script:SelfTestState.StartedAt
+            durationMs      = (Get-NowMs) - $script:SelfTestState.StartedAt
             pid             = $PID
         }
         $path = Join-Path $script:Cfg.dataDir 'selftest-result.json'
@@ -928,7 +939,7 @@ function Save-SelfTestResult {
 
 function Invoke-SelfTestTick {
     $st = $script:SelfTestState
-    $now = [Environment]::TickCount64
+    $now = (Get-NowMs)
     try {
         switch ($st.Step) {
             0 {
@@ -1106,7 +1117,7 @@ function Invoke-SelfTestTick {
 # Command prompts / status line helpers
 # ---------------------------------------------------------------------------
 
-function Get-Version { return '0.1.0' }
+function Get-Version { return '0.2.2' }
 
 # ---------------------------------------------------------------------------
 # Main pump
@@ -1139,7 +1150,7 @@ function Pump-Tick {
         try { Update-LoadingAnimation } catch { }
         # 5. toast expiry
         try {
-            if ($script:UI.Toast -and $script:UI.Toast.CloseAt -and [Environment]::TickCount64 -ge $script:UI.Toast.CloseAt) { Close-UiToast }
+            if ($script:UI.Toast -and $script:UI.Toast.CloseAt -and (Get-NowMs) -ge $script:UI.Toast.CloseAt) { Close-UiToast }
         } catch { }
         # 6. preview stream + commands
         try { Poll-PreviewStream } catch { }
@@ -1205,8 +1216,19 @@ function Initialize-Helper {
     try {
         $csPath = Join-Path $script:Here 'lib\SelectionHook.cs'
         $cs = [System.IO.File]::ReadAllText($csPath, [System.Text.Encoding]::UTF8)
-        Add-Type -TypeDefinition $cs -ErrorAction Stop
-        Write-Log 'debug' 'SelectionHook.cs 编译完成'
+        if ($PSVersionTable.PSVersion.Major -lt 6) {
+            # Windows PowerShell 5.1 runs on .NET Framework. Add-Type does not
+            # reference System.Net.Http there, so it must be added explicitly.
+            # The ServicePointManager tweaks skip the 100-continue round trip that
+            # .NET Framework adds to every POST (about 300 ms per request).
+            Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+            try { [System.Net.ServicePointManager]::Expect100Continue = $false } catch { }
+            try { [System.Net.ServicePointManager]::DefaultConnectionLimit = 10 } catch { }
+            Add-Type -TypeDefinition $cs -ReferencedAssemblies @('System.Net.Http') -ErrorAction Stop
+        } else {
+            Add-Type -TypeDefinition $cs -ErrorAction Stop
+        }
+        Write-Log 'debug' ('SelectionHook.cs 编译完成（PowerShell ' + $PSVersionTable.PSVersion.ToString() + '）')
     } catch {
         Write-Log 'error' ('C# 原生层编译失败: ' + $_.Exception.Message)
         Post-Status -State 'error' -Message ('原生层编译失败: ' + $_.Exception.Message)
@@ -1281,9 +1303,9 @@ function Initialize-Helper {
     # -- status ready ------------------------------------------------------
     if ($SelfTest) {
         $script:SelfTestState.Enabled = $true
-        $script:SelfTestState.StartedAt = [Environment]::TickCount64
+        $script:SelfTestState.StartedAt = (Get-NowMs)
         $script:SelfTestState.Step = 0
-        $script:SelfTestState.StepAt = [Environment]::TickCount64
+        $script:SelfTestState.StepAt = (Get-NowMs)
         $script:SuppressAutoClose = $true
         Write-Log 'info' '自测模式启动，不安装全局钩子'
     }

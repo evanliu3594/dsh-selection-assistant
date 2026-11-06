@@ -1,4 +1,5 @@
 // dsh-selection-assistant helper — native layer.
+// Add-Type on Windows PowerShell 5.1 compiles as C# 5: keep new syntax C# 5 compatible.
 //
 // This file is compiled in memory by SelectionAssistant.ps1 through Add-Type.
 // It owns everything that is easier in C# than in PowerShell:
@@ -58,7 +59,7 @@ public sealed class HookEvent {
     public bool Win;
     /// <summary>True for events produced by SendInput instead of the physical keyboard/mouse.</summary>
     public bool Injected;
-    /// <summary>Environment.TickCount64 at the moment the hook saw the event.</summary>
+    /// <summary>Clock.NowMs at the moment the hook saw the event.</summary>
     public long Ms;
 }
 
@@ -332,6 +333,15 @@ internal static class Native {
     internal static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
 }
 
+/// <summary>
+/// Monotonic millisecond clock. Environment.TickCount64 is a .NET Core API and
+/// does not exist on .NET Framework 4.8, the runtime of Windows PowerShell 5.1.
+/// Stopwatch starts when this class is first touched, which is once per helper.
+/// </summary>
+public static class Clock {
+    private static readonly System.Diagnostics.Stopwatch Sw = System.Diagnostics.Stopwatch.StartNew();
+    public static long NowMs { get { return Sw.ElapsedMilliseconds; } }
+}
 // ---------------------------------------------------------------------------
 // Low level hooks
 // ---------------------------------------------------------------------------
@@ -364,7 +374,7 @@ public static class SelectionHook {
     public static bool RCtrlDown { get { return _rCtrl; } }
     public static bool CtrlDown { get { return _lCtrl || _rCtrl; } }
 
-    public static long NowMs { get { return Environment.TickCount64; } }
+    public static long NowMs { get { return Clock.NowMs; } }
 
     /// <summary>Starts the hook thread. Returns false and fills LastError on failure.</summary>
     public static bool Install() {
@@ -483,7 +493,7 @@ public static class SelectionHook {
                 e.Phase = up ? "up" : "down";
                 e.Vk = vk;
                 e.Injected = injected;
-                e.Ms = Environment.TickCount64;
+                e.Ms = Clock.NowMs;
                 FillModifiers(e);
                 Queue.Enqueue(e);
             } catch { }
@@ -524,7 +534,7 @@ public static class SelectionHook {
         e.DownX = _downX;
         e.DownY = _downY;
         e.Injected = injected;
-        e.Ms = Environment.TickCount64;
+        e.Ms = Clock.NowMs;
         FillModifiers(e);
         return e;
     }
@@ -547,7 +557,7 @@ public static class SelectionHook {
         e.Phase = down ? "down" : "up";
         e.Vk = vk;
         e.Injected = false;
-        e.Ms = Environment.TickCount64;
+        e.Ms = Clock.NowMs;
         FillModifiers(e);
         Queue.Enqueue(e);
     }
@@ -885,10 +895,12 @@ public static class RestClient {
 
     private static HttpClient CreateClient() {
         try {
-            SocketsHttpHandler handler = new SocketsHttpHandler();
+            // .NET Framework 4.8 has no SocketsHttpHandler, so ConnectTimeout and
+            // PooledConnectionLifetime are unavailable. Loopback traffic must not
+            // go through the system proxy.
+            HttpClientHandler handler = new HttpClientHandler();
             handler.AllowAutoRedirect = false;
-            handler.ConnectTimeout = TimeSpan.FromSeconds(5);
-            handler.PooledConnectionLifetime = TimeSpan.FromMinutes(10);
+            handler.UseProxy = false;
             HttpClient c = new HttpClient(handler);
             c.Timeout = TimeSpan.FromSeconds(120);
             c.DefaultRequestHeaders.UserAgent.ParseAdd("dsh-selection-helper/0.1");

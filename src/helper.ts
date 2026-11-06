@@ -1,8 +1,10 @@
 /**
  * Lifecycle manager for the native selection-helper process.
  *
- * Two runtimes are supported from one manager:
- *   - Windows: PowerShell 7 runs `helper/SelectionAssistant.ps1` (WPF UI).
+ * Two platforms are supported from one manager:
+ *   - Windows: PowerShell 7 runs `helper/SelectionAssistant.ps1` (WPF UI); when
+ *              PowerShell 7 is absent, Windows PowerShell 5.1 runs the same
+ *              script because it depends only on .NET Framework 4.8 APIs.
  *   - macOS:   a statically linked Swift binary `helper/macos/bin/SelectionAssistant`
  *              is compiled on demand from `helper/macos/Sources` (AppKit UI).
  *
@@ -68,9 +70,9 @@ function readVersion(): string {
   try {
     const raw: unknown = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'))
     const version = (raw as { version?: unknown }).version
-    return typeof version === 'string' ? version : '0.2.1'
+    return typeof version === 'string' ? version : '0.2.2'
   } catch {
-    return '0.2.1'
+    return '0.2.2'
   }
 }
 
@@ -113,7 +115,11 @@ export function helperKindForPlatform(platform: NodeJS.Platform = process.platfo
   return 'none'
 }
 
-/** Find `pwsh.exe` on PATH and in the usual installation directories. */
+/**
+ * Find `pwsh.exe` on PATH and in the usual installation directories.
+ * PowerShell 7 is preferred; `findWindowsPowerShellOnDisk` supplies the
+ * Windows PowerShell 5.1 fallback for machines without it.
+ */
 function findPwshOnDisk(explicit: string): string | undefined {
   const candidates: string[] = []
   if (explicit.trim() !== '') candidates.push(explicit.trim())
@@ -146,9 +152,34 @@ function findPwshOnDisk(explicit: string): string | undefined {
   return windowsAppsGuess
 }
 
-/** Reject the Windows PowerShell 5.1 binary: the helper script needs PowerShell 7. */
-function isLegacyPowerShell(path: string): boolean {
-  return basename(path).toLowerCase() === 'powershell.exe'
+/** Windows PowerShell 5.1 host used when no PowerShell 7 is installed. */
+function legacyPowerShellPath(): string {
+  const windir = process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows'
+  return join(windir, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
+/** Find a Windows PowerShell 5.1 host; the helper scripts run there too. */
+function findWindowsPowerShellOnDisk(explicit: string): string | undefined {
+  const candidates: string[] = []
+  if (explicit.trim() !== '') candidates.push(explicit.trim())
+  candidates.push(legacyPowerShellPath())
+  for (const directory of (process.env.PATH ?? '').split(';')) {
+    if (directory.trim() !== '') candidates.push(join(directory.trim(), 'powershell.exe'))
+  }
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate)) return candidate
+    } catch {
+      // Ignore unreadable PATH entries.
+    }
+  }
+  // Keep the conventional path as the last resort: spawn reports the real error.
+  return legacyPowerShellPath()
+}
+
+/** Runtime label for the settings page; derived from the interpreter file name. */
+function runtimeLabelFor(path: string): string {
+  return basename(path).toLowerCase() === 'powershell.exe' ? 'Windows PowerShell 5.1' : 'PowerShell 7'
 }
 
 /** Promise-based delay used by the pid lifecycle helpers. */
@@ -272,7 +303,7 @@ export class HelperManager {
     if (this.resolvedExecutable !== '') return this.resolvedExecutable
     const configured = this.options.getSettings().advanced.helperPath.trim()
     if (configured !== '') return configured
-    if (this.kind === 'powershell') return findPwshOnDisk('') ?? 'pwsh'
+    if (this.kind === 'powershell') return findPwshOnDisk('') ?? findWindowsPowerShellOnDisk('') ?? 'pwsh'
     if (this.kind === 'swift') return HELPER_MAC_APP
     return ''
   }
@@ -300,12 +331,12 @@ export class HelperManager {
     const candidates: string[] = []
     const push = (candidate: string): void => {
       const trimmed = candidate.trim()
-      if (trimmed === '' || candidates.includes(trimmed) || isLegacyPowerShell(trimmed)) return
+      if (trimmed === '' || candidates.includes(trimmed)) return
       candidates.push(trimmed)
     }
     const override = (this.options.helperPathOverride ?? '').trim()
     for (const explicit of [configured, override]) {
-      if (explicit === '' || isLegacyPowerShell(explicit)) continue
+      if (explicit === '') continue
       try {
         const resolved = await this.options.getSubprocess()?.resolveExecutable?.(explicit)
         if (resolved !== undefined && resolved !== '') push(resolved)
@@ -326,6 +357,11 @@ export class HelperManager {
     if (found !== undefined) push(found)
     // Last resort: bare name resolved by CreateProcess through the host PATH.
     push('pwsh')
+    // Windows PowerShell 5.1 fallback: the helper scripts also run on .NET
+    // Framework, so accept it when PowerShell 7 is not installed. Keep it after
+    // every pwsh candidate so PowerShell 7 always wins when both exist.
+    push(findWindowsPowerShellOnDisk(''))
+    push('powershell.exe')
     return candidates
   }
 
@@ -435,7 +471,15 @@ export class HelperManager {
       this.publish({ status: 'error', lastError: `助手进程意外退出（${detail}）。`, pid: undefined })
       this.scheduleRestart()
     })
-    this.publish({ status: 'starting', pid: child.pid, startedAt: Date.now() })
+    // Publish the Windows interpreter family so the settings page can show it.
+    // macOS has a single native binary and therefore no runtime label.
+    const runtime = this.kind === 'powershell' ? runtimeLabelFor(executable) : undefined
+    this.publish({
+      status: 'starting',
+      pid: child.pid,
+      startedAt: Date.now(),
+      ...(runtime !== undefined ? { runtime } : {}),
+    })
     this.armReadyTimer()
     this.options.logger.info(`helper launched with ${executable} (pid=${String(child.pid ?? '')})`)
   }
@@ -469,7 +513,7 @@ export class HelperManager {
   }
 
   /** Spawn one PowerShell candidate; the config file is written first. */
-  private spawnPowerShell(pwsh: string, endpoint: HelperEndpoint): Promise<ChildProcess> {
+  private spawnPowerShell(executable: string, endpoint: HelperEndpoint): Promise<ChildProcess> {
     const args = [
       '-NoProfile',
       '-NonInteractive',
@@ -481,8 +525,8 @@ export class HelperManager {
       this.configFile,
     ]
     // Write the config before spawning: the helper reads it during startup.
-    this.writeConfig(endpoint, pwsh)
-    return this.spawnProcess(pwsh, args)
+    this.writeConfig(endpoint, executable)
+    return this.spawnProcess(executable, args)
   }
 
   /**
@@ -805,7 +849,7 @@ export class HelperManager {
     }
     this.publish({
       status: 'error',
-      lastError: `无法启动助手进程。已尝试：${failures.join('；')}。请在设置 → 高级 → 助手路径里填写 pwsh.exe 的完整路径。`,
+      lastError: `无法启动助手进程。已尝试：${failures.join('；')}。请在设置 → 高级 → 助手路径里填写 pwsh.exe（或 Windows PowerShell 5.1 的 powershell.exe）的完整路径。`,
     })
   }
 

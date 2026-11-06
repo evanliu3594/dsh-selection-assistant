@@ -8,7 +8,7 @@
 |---|---|---|
 | `src/` | 宿主半体：设置持久化、模型桥、助手进程管理、两个 HTTP 面 | 见 `src/` 内注释与 `references/contracts.md` |
 | `src/client/` | 浏览器半体：DSH 设置页「划词助手」 | `references/contracts.md` §3 |
-| `helper/` | Windows 助手进程（PowerShell 7 + WPF）：全局钩子、取词、工具栏、结果窗 | `helper/README.md` |
+| `helper/` | Windows 助手进程（PowerShell 7 或 Windows PowerShell 5.1 + WPF）：全局钩子、取词、工具栏、结果窗 | `helper/README.md` |
 | `helper/macos/` | macOS 助手进程（Swift + AppKit）：事件 tap、取词、工具栏、结果窗 | `helper/macos/README.md` |
 | `scripts/` | 构建与验证脚本（esbuild CLI、swiftc、探针、宿主/浏览器/助手验证） | 本文件 §4 |
 | `lib/` | 构建产物：`lib/index.js`（宿主）、`lib/client.js`（浏览器） | 只由 `node scripts/build.mjs` 生成 |
@@ -28,7 +28,7 @@
 | # | 决策 | 理由 |
 |---|---|---|
 | ① | 宿主半体运行在 DSH Host 的 Node 子进程，**不碰 Electron** | 实测 `dsh-desktop-host` 用 fork 启动运行时，插件拿不到 `BrowserWindow` |
-| ② | 悬浮工具栏/结果窗由独立 helper 进程提供 | 只有独立进程能跨应用置顶；Windows 用 PowerShell 7 + WPF，macOS 用 Swift + AppKit |
+| ② | 悬浮工具栏/结果窗由独立 helper 进程提供 | 只有独立进程能跨应用置顶；Windows 用 PowerShell 7（未安装时 Windows PowerShell 5.1）+ WPF，macOS 用 Swift + AppKit |
 | ③ | 取词只用剪贴板路径：保存 → 复制快捷键 → 读 → 还原 | 无 UIA、无截屏，权限与隐私成本最低；Windows 为 Ctrl+C，macOS 为 ⌘C |
 | ④ | 模型调用走 `ctx.llm.prepareCall()/stream()`，默认跟随 `agentDefaultModel` | 复用 DSH 的 DeepSeek 账号与模型路由，零凭据 |
 | ⑤ | 设置存 `<DSH_HOME>/selection-assistant/settings.json`，不走 plugin row config | 保存设置不应触发插件重启；row config 只留 dataDir/helperPath 两个引导项（旧 pwshPath 兼容） |
@@ -53,8 +53,9 @@ node scripts/verify-host.mjs            # 宿主：设置夹紧/落盘、全部�
 node scripts/verify-client-bundle.mjs   # 浏览器：注册 id、模块表、settings.section、locale、行内提示换行守卫
 
 # Windows
-node scripts/verify-helper-resolve.mjs  # 助手解析：pwsh 候选、拒绝 PS 5.1、helper-config 字段
+node scripts/verify-helper-resolve.mjs  # 助手解析：pwsh 优先、powershell.exe 兜底、双运行时探测、helper-config 字段
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1   # 助手：mock 宿主 + 按钮点击 + 截图 + 钩子层
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1   # 5.1 自测；或 pwsh selftest 加 -PowerShellExe 指定 5.1 助手
 
 # macOS
 sh scripts/build-macos-helper.sh        # swiftc 编译 app（首次启动时宿主也会自动调用）
@@ -75,6 +76,7 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 - 面向用户的文案中文（或按 UI locale 双语）；日志写文件，不写凭据与剪贴板内容。
 - 不修改 DSH 本体的 profile `package.json` / `cordis.patch.yml`，安装走 `plugin_manager install_bundle` 或 `dsh plugin add`。
 - helper 进程只由宿主拉起与回收；stdin 关闭 = 宿主退出，helper 必须退出。
+- Windows 助手双运行时：`SelectionHook.cs` 保持 C# 5（Windows PowerShell 5.1 的 Add-Type 上限）；三个 `.ps1` 保存为 UTF-8 with BOM；时钟用 `Clock.NowMs`/`Get-NowMs`，不使用 `Environment.TickCount64`。
 - macOS 助手打包为 `helper/macos/bin/SelectionAssistant.app`，宿主用 LaunchServices（`open`）启动；直接 spawn 内层二进制的授权会算到 DSH 头上，不要改成 spawn。源码改动会让宿主在下次启动时重新编译；产物不提交。重新编译会改变 ad-hoc 签名，辅助功能授权可能需要重新添加。
 - macOS 没有 stdin 管道：助手每 2 秒请求宿主 `/v1/health`，连续 3 次失败即退出；宿主按 `helper-state.json` 的 pid 发 SIGTERM 停止。Windows 仍用 stdin EOF。
 - 文档语言直白、先结论后证据；不出现「不是……而是……」句式。
@@ -83,7 +85,7 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 
 ## 6. 当前状态
 
-0.2.1 已合并到 `main`（远端 `main` 与 `feat/macos-support` 指向同一提交），并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
+0.2.2 在 0.2.1 基础上新增 Windows PowerShell 5.1 兜底（Windows 实机已验证，本地提交尚未推送）。0.2.1 已合并到 `main`（远端 `main` 与 `feat/macos-support` 指向同一提交），并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
 
 macOS 验证结果（2026-11-06，macOS 27.2 arm64、Swift 6.4.2）：
 
@@ -102,6 +104,14 @@ Windows 0.2.1（2026-11-06 Windows 实机补测）：
 - 实机修复：`Show-ResultWindow` 的 `$win.Activate()` 返回值泄漏进函数输出，导致结果流无法启动；改为 `[void]$win.Activate()`（提交 `07c8ac9`）。
 - 运行中插件已通过 `plugin_manager remove_bundle` + `install_bundle` 升级到 0.2.1（`application: applied`）；预览窗拖动/缩放后 `helper-state.json` 写入 `resultX/resultY/resultWidth/resultHeight`，下一个结果窗 rect 与保存值一致。
 - 待实机验收：pin 叠窗真实交互、多屏混合 DPI、重启后的几何恢复、真实划词端到端。
+
+Windows 0.2.2（2026-11-06 Windows 实机验证）：
+
+- 双运行时兜底：`pwsh` 7 优先，未安装时使用 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`；设置页状态卡显示运行环境。
+- 三组自测 PASS=22 SKIP=1 FAIL=0：7 宿主+7 助手、7 宿主+5.1 助手、5.1 宿主+5.1 助手；两运行时 `helper.log` 均无 ERROR。
+- 与 0.2.1 基线断言逐条一致；`probe`、`verify-host`、`verify-client-bundle`、`verify-helper-resolve` PASS；构建产物哈希可重复。
+- C# 5、UTF-8 BOM、`Get-NowMs`/`Clock.NowMs` 的约束已写入 §5。
+- 待人工验收：真实桌面 5.1 全局钩子/SendInput、5.1 多屏混合 DPI 与深色主题、宿主真实 spawn 5.1 的实机安装链路。
 
 待人工验收：macOS 辅助功能授权后的真实拖选/长按 Control/⌘C、两端 pin 叠窗与几何恢复、深色主题、多屏/混合 DPI、真实 DeepSeek 端到端。
 

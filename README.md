@@ -18,7 +18,7 @@
 | 依赖 | Windows | macOS |
 |---|---|---|
 | 系统 | Windows 10/11 | macOS 13.1 及以上 |
-| 原生助手 | PowerShell 7 + WPF | Swift + AppKit，打包为 `SelectionAssistant.app` |
+| 原生助手 | PowerShell 7 + WPF（未安装时回退 Windows PowerShell 5.1） | Swift + AppKit，打包为 `SelectionAssistant.app` |
 | 构建工具 | 无需额外工具 | Xcode Command Line Tools（`xcode-select --install`） |
 | 系统权限 | 无 | 辅助功能（全局事件 tap + ⌘C） |
 | DSH | 0.2.x 桌面版，需要 `llm` 服务 | 同左 |
@@ -43,7 +43,7 @@ dsh plugin --profile desktop add https://github.com/evanliu3594/dsh-selection-as
 
 1. 在 `%USERPROFILE%\.dsh\selection-assistant\`（Windows）或 `~/.dsh/selection-assistant/`（macOS）创建设置与日志；
 2. 在 `127.0.0.1` 随机端口启动助手通信服务；
-3. Windows 拉起 `helper/SelectionAssistant.ps1`（PowerShell 7 + WPF）；
+3. Windows 拉起 `helper/SelectionAssistant.ps1`（优先 PowerShell 7，未安装时用 Windows PowerShell 5.1；WPF 界面）；
 4. macOS 检查 `helper/macos/bin/SelectionAssistant.app`，缺失或源码更新时运行 `sh scripts/build-macos-helper.sh` 编译，然后通过 LaunchServices 启动这个 app。
 
 打开 设置 → 划词助手，确认状态卡显示「运行中」。
@@ -79,7 +79,7 @@ macOS 需要「辅助功能」权限才能监听全局事件并发送 ⌘C。第
 | 功能窗口 | 跟随工具栏、记住大小、失焦自动关闭、置顶、透明度；手动调整后固定位置/尺寸 |
 | 功能 | 动作启用与排序、编辑提示词、自定义动作、每动作模型覆盖、搜索引擎 |
 | 模型 | 服务、模型、推理强度、温度（留空跟随 DSH 默认） |
-| 高级 | 助手路径（Windows 为 pwsh）、日志级别、预览工具栏、查看日志 |
+| 高级 | 助手路径（Windows 为 pwsh 或 powershell）、日志级别、预览工具栏、查看日志 |
 
 设置保存到 `<数据目录>\settings.json`，保存后只重启助手进程，不重启 DSH。
 
@@ -100,7 +100,7 @@ macOS:   ~/.dsh/selection-assistant/
 
 ```text
 任意应用 ──选中文字──▶ 助手进程
-                          Windows: PowerShell 7 + WPF
+                          Windows: PowerShell 7 或 Windows PowerShell 5.1 + WPF
                           macOS:   Swift + AppKit
                           │  全局钩子 / 长按触发 / 复制取词
                           ▼
@@ -112,7 +112,7 @@ macOS:   ~/.dsh/selection-assistant/
 ```
 
 - 宿主半体（`src/`，构建到 `lib/index.js`）：设置持久化、模型调用、助手进程生命周期、两个 HTTP 面。按 `process.platform` 选择 PowerShell 或 Swift 助手。
-- 助手进程（`helper/`）：唯一碰操作系统的一层。Windows 用 PowerShell 7 + WPF；macOS 用 Swift + AppKit，源码在 `helper/macos/Sources/`，由 `swiftc` 编译成 `SelectionAssistant.app`，宿主用 LaunchServices 启动它，保证辅助功能授权算在助手自己头上。
+- 助手进程（`helper/`）：唯一碰操作系统的一层。Windows 优先用 PowerShell 7；未安装时回退 Windows 自带的 PowerShell 5.1，两者共用同一套 WPF 界面。macOS 用 Swift + AppKit，源码在 `helper/macos/Sources/`，由 `swiftc` 编译成 `SelectionAssistant.app`，宿主用 LaunchServices 启动它，保证辅助功能授权算在助手自己头上。
 - 设置页（`src/client/`，构建到 `lib/client.js`）：注册在 DSH 设置里的 React 页面，两平台共用。
 
 为什么不把悬浮窗做成 DSH 自己的窗口：DSH 插件宿主运行在独立 Node 子进程里，拿不到 Electron 的 `BrowserWindow`；跨应用置顶窗口只能由独立原生进程提供。
@@ -136,7 +136,7 @@ macOS:   ~/.dsh/selection-assistant/
 - 高级区「预览工具栏」需要助手进程正在运行。
 - macOS 宿主退出后，助手通过 `/v1/health` 检测到宿主消失并在约 6 秒内退出。
 - 不支持 Cherry Studio 的「Ask Agent / 引用到对话」动作；本插件的结果窗不回到 DSH 会话里。
-- Windows 需要 PowerShell 7；只有 Windows PowerShell 5.1 的机器会提示找不到 pwsh。
+- Windows 优先使用 PowerShell 7；未安装时自动回退 Windows PowerShell 5.1，功能一致，无需额外安装。
 - macOS 需要 Xcode Command Line Tools；没有 `swiftc` 时状态卡会给出安装命令。
 
 ## 排错
@@ -144,7 +144,7 @@ macOS:   ~/.dsh/selection-assistant/
 | 现象 | 处理 |
 |---|---|
 | 设置里没有「划词助手」入口 | 完整重启 DSH；设置页由启动时装配的浏览器产物提供，刷新页面不够 |
-| Windows 状态卡提示找不到 pwsh | 设置 → 高级 → 助手路径，填 `(Get-Command pwsh).Source` 的输出；或安装 PowerShell 7 |
+| Windows 状态卡提示找不到 PowerShell | 设置 → 高级 → 助手路径，填 `(Get-Command pwsh).Source` 的输出；没有 PowerShell 7 时填 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` |
 | macOS 状态卡提示「需要辅助功能权限」 | 点「打开辅助功能设置」，勾选 SelectionAssistant（可能显示“划词助手”）；不行就重启助手 |
 | macOS 状态卡提示无法构建助手 | 运行 `xcode-select --install`，装完点「重启助手」；或手动运行 `sh scripts/build-macos-helper.sh` 看编译错误 |
 | 状态卡为「错误」，助手 15 秒未就绪 | 设置 → 高级 → 查看日志；读数据目录下的 `helper.log` |
@@ -162,8 +162,9 @@ node scripts/verify-host.mjs            # 宿主：设置、路由、回环 SSE�
 node scripts/verify-client-bundle.mjs   # 浏览器产物：注册 id / 模块表 / settings.section
 
 # Windows
-node scripts/verify-helper-resolve.mjs  # 助手：pwsh 解析 + helper-config
+node scripts/verify-helper-resolve.mjs  # 助手：pwsh / powershell 解析 + helper-config
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1  # 助手自测（mock 宿主 + 按钮点击 + 截图）
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1  # Windows PowerShell 5.1 自测
 
 # macOS
 sh scripts/build-macos-helper.sh        # 编译 Swift 助手 app（宿主首次启动也会自动调用）

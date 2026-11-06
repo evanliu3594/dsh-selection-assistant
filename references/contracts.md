@@ -5,7 +5,7 @@
 支持两个平台，宿主与设置页共用，只有助手进程按平台实现：
 
 - **宿主半体**（`src/*.ts`，运行在 DSH Host 的 Node 子进程）：管设置、模型调用、helper 进程生命周期。
-- **助手进程（Windows）**（`helper/SelectionAssistant.ps1` + `helper/lib/**`，PowerShell 7 + WPF）：全局钩子、选词、工具栏、结果窗。
+- **助手进程（Windows）**（`helper/SelectionAssistant.ps1` + `helper/lib/**`，PowerShell 7，未安装时用 Windows PowerShell 5.1；WPF）：全局钩子、选词、工具栏、结果窗。
 - **助手进程（macOS）**（`helper/macos/Sources/**`，Swift + AppKit，`swiftc` 编译）：全局事件 tap、选词、工具栏、结果窗。
 - **设置页**（`src/client/**`，浏览器半体）：DSH 设置里的「划词助手」页面。
 
@@ -74,7 +74,7 @@ interface Settings {
   }
   actions: ActionSettings[]
   advanced: {
-    helperPath: string                         // '' = 自动探测（Windows）或首次启动编译（macOS）
+    helperPath: string                         // '' = 自动探测（Windows 优先 pwsh，未安装时 powershell.exe）或首次启动编译（macOS）
     logLevel: 'error' | 'warn' | 'info' | 'debug'
   }
 }
@@ -132,7 +132,8 @@ interface ActionSettings {
       "pid": 12345,
       "startedAt": 1730000000000,
       "lastError": "",
-      "restarts": 0
+      "restarts": 0,
+      "runtime": "PowerShell 7 | Windows PowerShell 5.1"
     },
     "platform": {
       "os": "win32 | darwin",
@@ -145,12 +146,12 @@ interface ActionSettings {
     },
     "defaults": { "provider": "deepseek-account", "model": "deepseek-flash", "reasoningEffort": "" },
     "paths": { "dataDir": "C:\\Users\\Evan\\.dsh\\selection-assistant", "log": "C:\\...\\helper.log" },
-    "version": "0.2.1"
+    "version": "0.2.2"
   }
 }
 ```
 
-`permissions.accessibility` 只在 macOS 有意义；Windows 恒为 `unknown`。权限状态由 helper 的 `/v1/status` 上报，宿主保存在内存里。
+`permissions.accessibility` 只在 macOS 有意义；Windows 恒为 `unknown`。权限状态由 helper 的 `/v1/status` 上报，宿主保存在内存里。`helper.runtime` 只在 Windows 有值，由宿主按实际启动的解释器文件名生成（`PowerShell 7` 或 `Windows PowerShell 5.1`）。
 
 ### POST `/selection-assistant/settings`
 
@@ -252,8 +253,8 @@ data: {"reason":"stop"}
 宿主启动：
 
 ```
-# Windows
-<pwsh> -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <helper/SelectionAssistant.ps1> -ConfigPath <helper-config.json>
+# Windows（优先 pwsh；未安装时宿主回退 powershell.exe）
+<pwsh | powershell.exe> -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <helper/SelectionAssistant.ps1> -ConfigPath <helper-config.json>
 
 # macOS（LaunchServices 启动 app，app 才是 TCC 负责进程）
 /usr/bin/defaults write com.evanliu3594.dsh-selection-assistant.helper HelperConfigPath -string <helper-config.json>
@@ -262,7 +263,7 @@ data: {"reason":"stop"}
 
 macOS 27 的 `open --args` 不把参数传给 app，因此配置路径走 UserDefaults 键 `HelperConfigPath`。helper 取配置的顺序：命令行 `--config` > UserDefaults `HelperConfigPath` > `~/.dsh/selection-assistant/helper-config.json`。开发/验证用的 `SuppressPermissionPrompt`（Bool）与 `ScreenshotDir`（String）也走 UserDefaults；直跑内层二进制时可用同名命令行参数覆盖。
 
-Windows 用 `windowsHide: true`，无控制台窗口；stderr/stdout 由宿主收集到日志。macOS app 首次启动时由宿主运行 `sh scripts/build-macos-helper.sh` 编译（需要 Xcode Command Line Tools），之后按源码修改时间增量重编。可用 `--universal` 生成 arm64 + x86_64 通用 app。
+Windows 用 `windowsHide: true`，无控制台窗口；stderr/stdout 由宿主收集到日志。同一份 helper 脚本在 PowerShell 7 与 Windows PowerShell 5.1 下运行；C# 5 语法、UTF-8 BOM 与时钟约束见 `helper/README.md`「运行时兼容」。宿主按「显式助手路径 → pwsh（解析器/磁盘/裸）→ powershell.exe（磁盘/裸）」解析候选。macOS app 首次启动时由宿主运行 `sh scripts/build-macos-helper.sh` 编译（需要 Xcode Command Line Tools），之后按源码修改时间增量重编。可用 `--universal` 生成 arm64 + x86_64 通用 app。
 
 macOS 的 stdin 不可用（app 由 LaunchServices 启动），因此宿主与助手的存活关系改为：
 
@@ -392,9 +393,10 @@ node scripts/probe.mjs
 # 两端通用：宿主路由、设置夹紧、回环 SSE、鉴权
 node scripts/verify-host.mjs
 
-# Windows：pwsh 解析 + helper-config 字段
+# Windows：pwsh 优先、powershell.exe 兜底、双运行时探测 + helper-config 字段
 node scripts/verify-helper-resolve.mjs
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1
 
 # macOS：编译 + 自测截图 + mock 宿主 SSE + LaunchServices + 健康退出
 node scripts/verify-macos-helper.mjs

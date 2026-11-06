@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.2.2 (2026-11-06)
+
+Windows 助手新增 Windows PowerShell 5.1 兜底；有 PowerShell 7 时优先用 7。
+
+### 新增
+
+- Windows 助手支持 Windows PowerShell 5.1：未安装 PowerShell 7 的机器（Windows 10/11 自带 5.1）无需额外安装即可使用，功能与 PS7 一致。
+- 宿主按「显式助手路径 → pwsh（解析器/磁盘/裸）→ powershell.exe（磁盘/裸）」解析候选；`verify-helper-resolve.mjs` 增加候选顺序、显式 5.1 与双运行时版本探测。
+- 设置页状态卡新增「运行环境」，显示 `PowerShell 7` 或 `Windows PowerShell 5.1`；高级区助手路径提示同步双运行时口径。
+- `helper/selftest.ps1` 新增 `-PowerShellExe`，可用 PowerShell 7 宿主驱动 5.1 助手自测。
+
+### 变更
+
+- C# 原生层时钟改为 `Clock.NowMs`（`Stopwatch`），HTTP 客户端改为 `HttpClientHandler`；兼容 .NET Framework 4.8。
+- PowerShell 层新增 `Get-NowMs`，替换全部 `[Environment]::TickCount64`；5.1 分支显式引用 `System.Net.Http` 并设置 `Expect: 100-continue=false`、连接数 10。
+- 三个助手脚本改为 UTF-8 with BOM；`SelectionHook.cs` 保持 C# 5 语法。
+- 助手版本号从 0.1.0 修正为与 package.json 一致的 0.2.2。
+
+### 修复
+
+- 无 PowerShell 7 时宿主不再拒绝 `powershell.exe`；此前该场景会提示找不到 pwsh。
+
+### 验证
+
+- 三组自测全部 PASS=22 SKIP=1 FAIL=0：PS7 宿主 + PS7 助手、PS7 宿主 + PS5.1 助手、PS5.1 宿主 + PS5.1 助手；两运行时 helper.log 均无 ERROR，编译行分别为 PowerShell 7.6.9 与 5.1.19041.6456。
+- 与 0.2.1 基线对比：22 条 PASS 断言逐条一致（含点击、pin、多窗口与几何断言）；截图尺寸 403×64 / 524×424。
+- 双运行时 Add-Type 编译 PASS；`Clock.NowMs` 单调；C#5 约束扫描全项 0 命中；`[Environment]::TickCount64` 可执行调用 0 处。
+- `probe`、`verify-host`、`verify-client-bundle`、`verify-helper-resolve` 全 PASS；构建产物哈希可重复。
+- 宿主真实 spawn 5.1 的端到端与 DSH 实机安装验收见 `references/verification.md`。
+- 仍待人工验收：真实交互桌面下的 5.1 全局钩子/SendInput、5.1 多屏混合 DPI 与深色主题、pin 叠窗真实鼠标交互。
+
 ## 0.2.1 (2026-11-06)
 
 结果窗几何固化与多窗口堆叠。

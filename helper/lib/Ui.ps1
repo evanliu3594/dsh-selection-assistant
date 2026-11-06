@@ -1,4 +1,4 @@
-# Ui.ps1 — WPF windows for the selection assistant (toolbar + result window).
+﻿# Ui.ps1 — WPF windows for the selection assistant (toolbar + result window).
 # Dot-sourced by SelectionAssistant.ps1 into the script scope, so $script:Cfg,
 # $script:UiHooks and $script:UI are shared with the entry script.
 
@@ -522,7 +522,7 @@ function Show-UiToast {
     if (($ty + $h) -gt $work[3]) { $ty = $Y - $h - 8 }
     [WindowUtil]::MoveWindow($script:UI.Toast.Hwnd, $tx, $ty, $true)
     $win.Opacity = 0.97
-    $script:UI.Toast.CloseAt = [Environment]::TickCount64 + 1100
+    $script:UI.Toast.CloseAt = (Get-NowMs) + 1100
 }
 
 function Close-UiToast {

@@ -4,7 +4,8 @@
  * Wires four modules into one plugin row:
  *   settings  — `<dataDir>/settings.json`, edited by the browser settings page
  *   llm       — streams DeepSeek (or any configured route) through `ctx.llm`
- *   helper    — owns the PowerShell 7 + WPF selection helper process
+ *   helper    — owns the selection helper process (Windows: PowerShell 7 + WPF,
+ *               Windows PowerShell 5.1 fallback; macOS: Swift + AppKit)
  *   server    — settings routes on the DSH web server + loopback SSE for the helper
  *
  * Every DSH service is optional: a profile without `llm`, `webServer`,

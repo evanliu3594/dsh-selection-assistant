@@ -319,6 +319,8 @@ export interface HelperStatus {
   status: 'stopped' | 'starting' | 'running' | 'error'
   pid?: number
   startedAt?: number
+  /** Windows interpreter family serving the helper: "PowerShell 7" or "Windows PowerShell 5.1". */
+  runtime?: string
   lastError?: string
   restarts: number
 }
@@ -345,7 +347,7 @@ export interface StateDto {
   platform: {
     os: string
     arch: string
-    /** Resolved helper executable (pwsh.exe on Windows, Swift binary on macOS). */
+    /** Resolved helper executable (pwsh.exe or powershell.exe on Windows, Swift binary on macOS). */
     helper: string
     helperKind: HelperKind
     supported: boolean
