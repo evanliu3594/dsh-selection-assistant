@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.3 (2026-11-06)
+
+新增翻译语言设置：目标语言与备选语言可在设置页选择，翻译前先本地判断源语言。
+
+### 新增
+
+- 设置页新增「翻译语言」区：目标语言（destLanguage）默认取本机显示语言，备选语言（optLanguage）默认 English；支持 20 种常用语言。
+- 本地语言预判模块 `src/lang.ts`：按 Unicode 字符脚本 + 拉丁功能词判断源语言；判断不了返回 unknown，交给模型。
+- 翻译分流：源语言已知且不是目标语言 → 译成目标语言；源语言等于目标语言 → 译成备选语言；两者相同 → 直接报错「目标语言与源语言重叠」，不调用模型。
+- 新增 `scripts/verify-lang.mjs`（122 项检查）。
+
+### 变更
+
+- `language.target` / `language.fallback` 改存语言代码（如 `zh`、`en`）；旧设置里的「简体中文」「English」等显示名加载时自动迁移。
+- 默认目标语言跟随本机显示语言（`Intl.DateTimeFormat().resolvedOptions().locale`），不再固定「简体中文」。
+- 已知源语言的翻译提示词直接使用解析后的目标语言，不再重复「如果已经是目标语言就翻译成备选语言」的条件句。
+
+### 修复
+
+- 翻译目标与源语言重叠时不再发模型请求，结果窗显示「目标语言与源语言重叠」。
+
+### 验证
+
+- `node --experimental-strip-types scripts/verify-lang.mjs` PASS（122 项）。
+- `build`、`probe`、`verify-host`、`verify-client-bundle`、`verify-helper-resolve`、`helper/selftest.ps1` 全 PASS。
+- 独立验证：重叠路径 `prepareCall=0`、模型流 0 次；SSE 先 meta 后 error（code=language-overlap）。
+- 实机安装 0.2.3 与设置保存、/v1/action 重叠错误见 `references/verification.md`。
+- 仍待人工验收：真实模型对 unknown 文本的兜底、设置页真实渲染与下拉交互。
+
 ## 0.2.2 (2026-11-06)
 
 Windows 助手新增 Windows PowerShell 5.1 兜底；有 PowerShell 7 时优先用 7。

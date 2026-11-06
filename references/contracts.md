@@ -65,8 +65,8 @@ interface Settings {
   }
   language: {
     ui: 'zh' | 'en'                            // 默认 'zh'
-    target: string                             // 默认 '简体中文'
-    fallback: string                           // 默认 'English'
+    target: string                             // 语言代码；默认取本机显示语言（如 'zh'、'en'）
+    fallback: string                           // 语言代码；默认 'en'
   }
   appFilter: {
     mode: 'off' | 'blacklist' | 'whitelist'    // 默认 'off'
@@ -111,6 +111,11 @@ interface ActionSettings {
 - 保存是**深合并**：客户端只需提交改动的字段；`actions` 若提交则整体替换。
 - 保存后立即重启 helper（宿主自己负责），不重启 Host、不重启插件。
 - `advanced.pwshPath` 是 0.1 的字段名。0.2 读取时若不存在 `helperPath` 才回退到旧字段，之后只写 `helperPath`。
+- 翻译语言（0.2.3）：`language.target` 与 `language.fallback` 存语言代码；旧设置里的「简体中文」「English」等在加载时自动迁移。翻译动作先由本地脚本判断源语言：
+  - 源语言已知且不是 `target`：译成 `target`；
+  - 源语言已知且等于 `target`：译成 `fallback`；
+  - `target` 与 `fallback` 相同且源语言是 `target`：不调用模型，SSE 返回 `error` 事件 `{ code: 'language-overlap', message: '目标语言与源语言重叠' }`；
+  - 源语言 unknown：交给模型判断，提示词包含重叠规则。
 
 ## 3. 设置页 HTTP 契约（宿主 `webServer`，前缀 `/selection-assistant`）
 
@@ -146,7 +151,7 @@ interface ActionSettings {
     },
     "defaults": { "provider": "deepseek-account", "model": "deepseek-flash", "reasoningEffort": "" },
     "paths": { "dataDir": "C:\\Users\\Evan\\.dsh\\selection-assistant", "log": "C:\\...\\helper.log" },
-    "version": "0.2.2"
+    "version": "0.2.3"
   }
 }
 ```
@@ -367,6 +372,12 @@ helper 状态文件 `helper-state.json`（helper 写）：
 - macOS：SF Symbols 名称映射同一套 icon key（如 translate → `translate`、search → `magnifyingglass`、copy → `doc.on.doc`）；系统没有该符号时退化为文字符号，不崩溃。
 - 宿主设置页用同一套 icon key。
 
+### 设置页「翻译语言」
+
+- 两个原生下拉：目标语言（`language.target`）与备选语言（`language.fallback`），选项来自 `LANGUAGES`（20 种），显示名随 `language.ui` 切换。
+- 位置：触发方式之后、应用过滤之前。
+- 允许两者相同；相同值不拦截，仅在底部说明运行时会直接报错。
+
 ## 8. 写入边界（并行开发时严格遵守）
 
 | 范围 | 归属 |
@@ -395,6 +406,7 @@ node scripts/verify-host.mjs
 
 # Windows：pwsh 优先、powershell.exe 兜底、双运行时探测 + helper-config 字段
 node scripts/verify-helper-resolve.mjs
+node --experimental-strip-types scripts/verify-lang.mjs
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1
 

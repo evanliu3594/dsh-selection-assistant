@@ -40,6 +40,8 @@
 ## 3. 接口与文件归属
 
 - `src/contract.ts` 是共享类型（Settings、ActionSettings、HelperConfig、StateDto、路由前缀、默认动作与默认提示词），宿主与浏览器半体都从它导入；helper 只看 `references/contracts.md` 的 JSON 形态。
+- `src/lang.ts` 是翻译语言模块：语言表、系统默认语言、本地检测、目标分流与 `LanguageOverlapError`。设置字段 `language.target` / `language.fallback` 存语言代码。
+- 翻译规则：源语言已知且不是 target → target；等于 target → fallback；target == fallback 且源语言是 target → 报错「目标语言与源语言重叠」，不调用模型；unknown 交给模型。
 - 新增/修改任何跨进程字段：先改 `references/contracts.md`，再改 `src/contract.ts`，最后改两端实现。
 - 默认动作（6 个）：translate / explain / summarize / search / copy 启用，optimize 关闭；自定义动作上限 20，工具栏直显上限 8。
 
@@ -54,6 +56,7 @@ node scripts/verify-client-bundle.mjs   # 浏览器：注册 id、模块表、se
 
 # Windows
 node scripts/verify-helper-resolve.mjs  # 助手解析：pwsh 优先、powershell.exe 兜底、双运行时探测、helper-config 字段
+node --experimental-strip-types scripts/verify-lang.mjs  # 翻译语言检测与目标分流
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1   # 助手：mock 宿主 + 按钮点击 + 截图 + 钩子层
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1   # 5.1 自测；或 pwsh selftest 加 -PowerShellExe 指定 5.1 助手
 
@@ -85,7 +88,7 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 
 ## 6. 当前状态
 
-0.2.2 在 0.2.1 基础上新增 Windows PowerShell 5.1 兜底（Windows 实机已验证，本地提交尚未推送）。0.2.1 已合并到 `main`（远端 `main` 与 `feat/macos-support` 指向同一提交），并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
+0.2.3 在 0.2.2 基础上新增翻译语言设置与本地预判（Windows 实机已验证，本地提交尚未推送）。0.2.2 新增 Windows PowerShell 5.1 兜底；0.2.1 已合并到 `main`（远端 `main` 与 `feat/macos-support` 指向同一提交），并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
 
 macOS 验证结果（2026-11-06，macOS 27.2 arm64、Swift 6.4.2）：
 
@@ -112,6 +115,14 @@ Windows 0.2.2（2026-11-06 Windows 实机验证）：
 - 与 0.2.1 基线断言逐条一致；`probe`、`verify-host`、`verify-client-bundle`、`verify-helper-resolve` PASS；构建产物哈希可重复。
 - C# 5、UTF-8 BOM、`Get-NowMs`/`Clock.NowMs` 的约束已写入 §5。
 - 待人工验收：真实桌面 5.1 全局钩子/SendInput、5.1 多屏混合 DPI 与深色主题、宿主真实 spawn 5.1 的实机安装链路。
+
+Windows 0.2.3（2026-11-06 Windows 实机验证）：
+
+- 设置页新增「翻译语言」区：目标语言默认取本机显示语言，备选语言默认 English；旧设置显示名自动迁移为语言代码。
+- 本地预判模块 `src/lang.ts`：源语言已知时按 target/fallback 分流；target == fallback 且源语言是 target 时不调用模型，SSE 返回 `error`（code=language-overlap，message=目标语言与源语言重叠）；unknown 交给模型。
+- `verify-lang` 122 项、全部 node 门、`helper/selftest.ps1` PASS；独立验证 248 项，重叠路径 prepareCall=0。
+- 实机安装 0.2.3：旧设置迁移为 `zh/en`；切到 `en/en` 后英文 action 返回 meta + error；恢复 `zh/en`。
+- 待人工验收：真实模型对 unknown 文本的兜底、设置页真实渲染与下拉交互、结果窗显示该错误。
 
 待人工验收：macOS 辅助功能授权后的真实拖选/长按 Control/⌘C、两端 pin 叠窗与几何恢复、深色主题、多屏/混合 DPI、真实 DeepSeek 端到端。
 

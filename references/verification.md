@@ -1,4 +1,4 @@
-# 验证记录 — dsh-selection-assistant（0.1.0 Windows / 0.2.0 双端 / 0.2.1 结果窗几何 / 0.2.2 双运行时）
+# 验证记录 — dsh-selection-assistant（0.1.0 Windows / 0.2.0 双端 / 0.2.1 结果窗几何 / 0.2.2 双运行时 / 0.2.3 翻译语言）
 
 0.1.0 验证环境：Windows 11、DSH 桌面版 0.2.2-rc.1（desktop profile）、PowerShell 7.6.9、DSH 默认模型 `deepseek-account / deepseek-flash`。
 
@@ -309,3 +309,42 @@ Windows 仍待实机验收：pin 叠窗的真实鼠标交互、多屏混合 DPI�
 1. 真实交互桌面下 5.1 助手的全局钩子与 SendInput（本次低完整性沙箱 SKIP，需 `-RequireRealHook` 普通会话）。
 2. 5.1 多屏混合 DPI、深色主题、pin 叠窗真实鼠标交互。
 3. 无 PowerShell 7 的干净机器上的完整安装链路（本次用显式路径模拟，解析逻辑已覆盖隐藏 pwsh 的候选测试）。
+
+## 12. 0.2.3 翻译语言设置与本地预判验证（2026-11-06）
+
+验证环境：Windows 11、PowerShell 7.6.9、DSH 桌面版 0.2.2-rc.1。
+
+### 12.1 实现
+
+- 设置页新增「翻译语言」区：目标语言（默认取本机显示语言）与备选语言（默认 English），共 20 种语言；`language.target` / `language.fallback` 改存语言代码，旧显示名加载时迁移。
+- `src/lang.ts`：Unicode 字符脚本 + 拉丁功能词本地判断；目标分流与 `LanguageOverlapError`。
+- `src/llm.ts`：翻译动作在提示词构建阶段先分流；重叠时在模型调用前抛出错误，SSE 返回 `error` 事件；unknown 时提示词带重叠规则。
+- `src/server.ts`：SSE `error` 事件透出 `code=language-overlap` 与消息。
+
+### 12.2 自动验证
+
+| 项 | 结果 |
+|---|---|
+| `node --experimental-strip-types scripts/verify-lang.mjs` | PASS，122 项 |
+| `build` / `probe` / `verify-host` / `verify-client-bundle` / `verify-helper-resolve` | 全 PASS |
+| `helper/selftest.ps1` | PASS=22 SKIP=1 FAIL=0 |
+| 独立验证（release-verifier） | 248 项检查全过；重叠路径 `prepareCall=0`、模型流 0 次；SSE 先 meta 后 error |
+| 构建可重复 | 重建前后三产物 SHA256 不变 |
+
+### 12.3 实机切换与错误帧
+
+- `plugin_manager` 安装 0.2.3（`application: applied`）；运行实例 `version=0.2.3`，旧设置自动迁移为 `target=zh`、`fallback=en`。
+- 设置页路由切换为 `target=en`、`fallback=en` 后，直接调用 `/v1/action`（英文文本）返回：
+  ```
+  event: meta
+  event: error
+  data: {"code":"language-overlap","message":"目标语言与源语言重叠"}
+  ```
+- 恢复 `target=zh`、`fallback=en` 后状态正常。
+
+### 12.4 未验证 / 人工验收
+
+1. 真实模型对 unknown 文本的兜底行为（本地判断不了时）。
+2. 设置页真实渲染、两个下拉交互、最长标签在窄窗口的排版。
+3. helper 结果窗显示该错误帧的实际视觉效果。
+4. macOS 侧界面与行为（共用同一套 TS 逻辑）。

@@ -9,6 +9,7 @@
 - 在浏览器、Word、PDF 阅读器、聊天软件等任意应用里选中文字。
 - 按住 Ctrl（macOS 为 Control）约 0.5 秒（可调 200–1500ms），鼠标旁弹出浮动工具栏。
 - 工具栏上的每个动作都是一次模型调用：默认启用翻译、解释、总结、搜索、复制，润色默认关闭。
+- 翻译动作按「目标语言 / 备选语言」自动分流：本地先判断选中文字的语言，非目标语言译成目标语言，已经是目标语言则译成备选语言；两者相同时，目标语言原文直接报错「目标语言与源语言重叠」，不调用模型。判断不了的语言交给模型处理。
 - 结果窗流式显示 DeepSeek 输出，可复制、重新生成、调整大小、钉在最前；跟随工具栏、置顶、失焦可自动关闭。
 - 模型默认跟随 DSH 的默认模型（桌面版即 DeepSeek 账号模型），也可在设置里单独指定服务与模型。
 - 设置页在 DSH 设置 → 划词助手，两个平台共用。
@@ -75,6 +76,7 @@ macOS 需要「辅助功能」权限才能监听全局事件并发送 ⌘C。第
 |---|---|
 | 状态 | 启用开关、助手进程状态、macOS 辅助功能权限、重启 |
 | 触发方式 | 选中文字 / 长按触发键 / 快捷键；长按时长；快捷键 |
+| 翻译语言 | 目标语言（默认取本机显示语言）、备选语言（默认 English）；本地判断源语言后分流 |
 | 工具栏 | 紧凑模式（只显示图标）、最多直显动作数、缩放 |
 | 功能窗口 | 跟随工具栏、记住大小、失焦自动关闭、置顶、透明度；手动调整后固定位置/尺寸 |
 | 功能 | 动作启用与排序、编辑提示词、自定义动作、每动作模型覆盖、搜索引擎 |
@@ -137,6 +139,7 @@ macOS:   ~/.dsh/selection-assistant/
 - macOS 宿主退出后，助手通过 `/v1/health` 检测到宿主消失并在约 6 秒内退出。
 - 不支持 Cherry Studio 的「Ask Agent / 引用到对话」动作；本插件的结果窗不回到 DSH 会话里。
 - Windows 优先使用 PowerShell 7；未安装时自动回退 Windows PowerShell 5.1，功能一致，无需额外安装。
+- 翻译语言的本地判断是启发式：拉丁语系短句、专有名词可能判断不出来，这类文本交给模型决定；纯汉字日文会按中文处理。
 - macOS 需要 Xcode Command Line Tools；没有 `swiftc` 时状态卡会给出安装命令。
 
 ## 排错
@@ -163,6 +166,7 @@ node scripts/verify-client-bundle.mjs   # 浏览器产物：注册 id / 模块�
 
 # Windows
 node scripts/verify-helper-resolve.mjs  # 助手：pwsh / powershell 解析 + helper-config
+node --experimental-strip-types scripts/verify-lang.mjs  # 翻译语言检测与目标分流
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1  # 助手自测（mock 宿主 + 按钮点击 + 截图）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1  # Windows PowerShell 5.1 自测
 
