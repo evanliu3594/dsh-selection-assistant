@@ -2,7 +2,7 @@
 
 0.1.0 验证环境：Windows 11、DSH 桌面版 0.2.2-rc.1（desktop profile）、PowerShell 7.6.9、DSH 默认模型 `deepseek-account / deepseek-flash`。
 
-0.2.0 与 0.2.1 验证环境：macOS 27.2（arm64）、Swift 6.4.2（Xcode Command Line Tools）、Node 26.13.0、DSH 桌面版 0.2.1-rc.3。Windows 结果窗改动在本机只做 PowerShell 语法与纯函数几何校验，未运行 WPF。
+0.2.0 与 0.2.1 验证环境：macOS 27.2（arm64）、Swift 6.4.2（Xcode Command Line Tools）、Node 26.13.0、DSH 桌面版 0.2.1-rc.3。Windows 结果窗改动最初只在 macOS 上做 PowerShell 语法与纯函数几何校验；2026-11-06 晚已在 Windows 实机安装 0.2.1，并补齐 WPF 自测与实时几何验证（见 §10.2）。
 
 本文件保留 0.1.0 的完整验证记录。0.2.0 的 macOS 验证见第 9 节，0.2.1 的结果窗几何验证见第 10 节。
 
@@ -239,26 +239,27 @@
 
 验证数据目录改到系统临时目录（`mkdtempSync(tmpdir())`）。LaunchServices 启动的 app 读取仓库（Desktop）内配置会触发 macOS“桌面文件夹”TCC；生产数据目录是 `~/.dsh/selection-assistant`，不受影响。
 
-### 10.2 Windows
+### 10.2 Windows（2026-11-06 实机补测）
 
-本机无 Windows/WPF 运行环境，使用 macOS 上的 PowerShell 7.6.9 做静态与纯函数验证：
+环境：Windows 11、PowerShell 7.6.9、DSH 桌面版 0.2.2-rc.1（desktop profile）。
 
 | 面 | 方法 | 结果 |
 |---|---|---|
-| 语法 | `[Parser]::ParseFile` 解析 `Ui.ps1`、`SelectionAssistant.ps1`、`selftest.ps1` | PASS，无语法错误 |
-| 默认定位 | 无当前窗、无保存几何 | PASS：返回默认 placement，跟随/居中由原逻辑处理 |
-| pin 堆叠 | 当前窗 pin | PASS：内容尺寸同旧窗，原点 `X-24 / Y+24` |
-| 未 pin 原位 | 当前窗未 pin | PASS：原点与尺寸沿用当前窗 |
-| 保存几何 | 无当前窗、状态含 `resultX/resultY/resultWidth/Height` | PASS：使用保存值与 rememberedSize |
-| 结果列表 | 多上下文移除 | PASS：只移除目标上下文 |
-| 自测断言 | 代码审阅 | 已新增 `stackOk/stackOffsetX/stackOffsetY/stackSameSize/oldVisible` 与多窗口步骤；未运行 WPF |
+| 助手自测 | `pwsh -File helper/selftest.ps1` | PASS=22 SKIP=1 FAIL=0；含多窗口断言（旧窗保留、同尺寸、原点偏移 `-24,+24`）；截图 403×64 / 524×424 |
+| 几何专项 | 本机测试脚本（加载 `Ui.ps1` + `SelectionHook.cs`） | PASS：保存几何驱动新窗、`rememberSize=false` 回落尺寸、`OnSaveResultPosition` 取真实窗口原点、未 pin 原位、pin 偏移 `(-24,+24)` |
+| 宿主通用门 | `probe`、`verify-host`、`verify-client-bundle`、`verify-helper-resolve` | PASS |
+| 实机安装 | `plugin_manager remove_bundle` + `install_bundle`（同一 link 目录） | `application: applied`；运行实例 `bundleVersion=0.2.1`，助手 PID 4788，`helperKind=powershell` |
+| 预览 smoke | `POST /selection-assistant/helper/preview` | PASS：`预览命令已执行`、SSE done；无 ERROR |
+| 实时几何 | 第一次预览后拖动/缩放窗口 → `helper-state.json`；无当前窗时再次预览 | PASS：保存 `resultX=1380`、`resultY=203`、`resultWidth=334`、`resultHeight=426`；下一个结果窗 rect 为 `1380,203,358×450`（等于保存值 + 24 frame） |
 
-Windows 待实机验收：`helper/selftest.ps1`（含新增多窗口断言）、真实拖动/缩放保存、pin 叠窗与多屏混合 DPI。预期 selftest PASS 数比 0.2.0 增加 1 项（多窗口断言）。
+实机过程中发现并修复一个 Windows 阻断缺陷：`Show-ResultWindow` 的 `$win.Activate()` 返回值未抑制，混入函数返回值，`Start-ResultStream` 收到数组而不是结果窗上下文，`$ctx.App` 抛错导致结果流无法启动。修复为 `[void]$win.Activate()`；提交 `07c8ac9`。
+
+Windows 仍待实机验收：pin 叠窗的真实鼠标交互、多屏混合 DPI、重启后的几何恢复、真实划词端到端。预期 selftest PASS 数比 0.2.0 增加 1 项（多窗口断言）。
 
 ### 10.3 未验证 / 人工验收
 
-1. Windows 实机自测与真实 WPF 多窗口交互。
+1. Windows 多屏混合 DPI、pin 叠窗真实鼠标交互、重启后的几何恢复。
 2. macOS 辅助功能授权后的真实拖选、⌘C、点击外部/失焦、多 pin 窗交互。
-3. 两端手动拖动/缩放后的位置保存与重启后恢复。
+3. macOS 手动拖动/缩放后的位置保存与重启后恢复；Windows 已验证保存值与下一窗口沿用，重启后恢复未单独验证。
 4. 深色主题、溢出菜单、多屏/混合 DPI、Intel 实机。
 5. 真实 DeepSeek 端到端。

@@ -94,5 +94,5 @@
 ## 8. 0.2.1 实现与验证状态
 
 - macOS：`SelectionAssistant.app` 构建 PASS（646944 字节，arm64 13.1）；`--selftest` 的 `ok/clicked/pinToggled/resizeOk/stackOk/done` 全 true，`sessionCount=2`；`verify-macos-helper`、`verify-host-macos` PASS。
-- Windows：`Ui.ps1`、`SelectionAssistant.ps1`、`selftest.ps1` 语法解析 PASS；纯函数几何测试覆盖默认、pin 偏移 `(-24,+24)`、未 pin 原位、保存几何、结果列表移除，全部 PASS。WPF 运行时自测待 Windows 实机。
+- Windows（2026-11-06 实机）：`helper/selftest.ps1` PASS=22 SKIP=1 FAIL=0，多窗口断言通过；几何专项测试 PASS；实机安装 0.2.1 后拖动/缩放写入 `resultX/resultY`，下一个结果窗沿用保存的 rect。实机修复 `Show-ResultWindow` 的 `$win.Activate()` 输出泄漏。
 - 自动验证的 macOS 配置/数据目录放在系统临时目录，避免 LaunchServices app 读取 Desktop 配置触发“桌面文件夹”TCC。

@@ -16,13 +16,19 @@
 - `helper-state.json` 增加 `resultX`/`resultY`（窗口原点）；尺寸继续使用 `resultWidth`/`resultHeight`。
 - `rememberSize` 继续控制尺寸记忆；位置记忆独立生效。
 
+### 修复
+
+- Windows：`Show-ResultWindow` 的 `$win.Activate()` 返回值混入函数输出，`Start-ResultStream` 收到数组而不是结果窗上下文，`$ctx.App` 报错导致结果流无法启动。改为 `[void]$win.Activate()`。
+
 ### 验证
 
 - macOS 构建 PASS（646944 字节，arm64 13.1）；自测 PASS，`ok/clicked/pinToggled/resizeOk/stackOk/done` 全 true，`sessionCount=2`。
 - macOS 助手端到端 `verify-macos-helper` PASS（LaunchServices、status/log、preview SSE、截图、健康退出）。
 - macOS 宿主管线 `verify-host-macos` PASS（真实 HelperManager 构建启动、预览动作、SIGTERM 回收）。
 - 通用门 `probe`、`verify-host`、`verify-client-bundle` PASS。
-- Windows：三个 PowerShell 文件语法解析 PASS；纯函数级几何测试覆盖默认、pin 偏移 `(-24,+24)`、未 pin 原位、保存几何与结果列表移除，全部 PASS。本机无 Windows/WPF 运行环境，Windows 自测与 WPF 交互仍需实机验收。
+- Windows 实机：`helper/selftest.ps1` PASS=22 SKIP=1 FAIL=0（含多窗口断言）；几何专项测试 PASS；`probe`、`verify-host`、`verify-client-bundle`、`verify-helper-resolve` PASS。
+- Windows 实机安装：`plugin_manager` 升级到 0.2.1（`application: applied`）；预览窗拖动/缩放后保存 `resultX/resultY/resultWidth/resultHeight`，下一次结果窗沿用保存的 rect（1380,203,358×450）。
+- Windows 仍待实机验收：pin 叠窗真实交互、多屏混合 DPI、重启后的几何恢复、真实划词端到端。
 
 ## 0.2.0 (2026-11-06)
 
