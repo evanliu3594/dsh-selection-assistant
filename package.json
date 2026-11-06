@@ -11,6 +11,15 @@
     "global-hook"
   ],
   "license": "MIT",
+  "author": "evanliu3594",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/evanliu3594/dsh-selection-assistant.git"
+  },
+  "homepage": "https://github.com/evanliu3594/dsh-selection-assistant#readme",
+  "bugs": {
+    "url": "https://github.com/evanliu3594/dsh-selection-assistant/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "exports": {

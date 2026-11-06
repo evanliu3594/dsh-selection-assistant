@@ -2,7 +2,7 @@
 
 在任意 Windows 软件里选中文字，长按 Ctrl，弹出划词工具栏；点一下就交给 DSH 当前配置的 DeepSeek 模型翻译、解释、总结、搜索或复制。形态、动作与设置项参考 [Cherry Studio 的划词助手](https://github.com/CherryHQ/cherry-studio)。
 
-![状态](https://img.shields.io/badge/platform-Windows-blue) ![类型](https://img.shields.io/badge/type-DSH%20bundle-green)
+[![GitHub](https://img.shields.io/badge/GitHub-evanliu3594-181717?logo=github)](https://github.com/evanliu3594/dsh-selection-assistant) ![平台](https://img.shields.io/badge/platform-Windows-blue) ![类型](https://img.shields.io/badge/type-DSH%20bundle-green)
 
 ## 它做什么
 
@@ -28,12 +28,14 @@
 在 DSH 里安装本 bundle（二选一）：
 
 ```text
-# 方式一：让 Agent 用 plugin_manager install_bundle 安装本目录
-<本仓库路径>
+# 方式一：让 Agent 用 plugin_manager install_bundle 安装本仓库
+target: https://github.com/evanliu3594/dsh-selection-assistant
 
 # 方式二：命令行
-dsh plugin --profile desktop add <本仓库路径>
+dsh plugin --profile desktop add https://github.com/evanliu3594/dsh-selection-assistant
 ```
+
+本地开发时也可以先克隆仓库，再把克隆目录交给 `install_bundle` 或 `dsh plugin add`，用 `link:` 安装便于改代码。
 
 安装后重启 DeepSeek Harness（浏览器产物在启动时装配）。首次加载时插件会：
 
@@ -135,6 +137,8 @@ node scripts/verify-client-bundle.mjs # 浏览器产物：注册 id / 模块表 
 node scripts/verify-helper-resolve.mjs # 助手：pwsh 解析 + helper-config
 pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1  # 助手自测（mock 宿主 + 按钮点击 + 截图）
 ```
+
+接口契约见 [`references/contracts.md`](references/contracts.md)，验证记录见 [`references/verification.md`](references/verification.md)，Cherry Studio 对照研究见 [`references/cherry-studio-selection-assistant.md`](references/cherry-studio-selection-assistant.md)。
 
 ## 许可
 

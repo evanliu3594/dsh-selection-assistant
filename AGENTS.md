@@ -66,7 +66,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1   # 助手：m
 - helper 进程只由宿主拉起与回收；stdin 关闭 = 宿主退出，helper 必须退出。
 - 文档语言直白、先结论后证据；不出现「不是……而是……」句式。
 - 未知字段、越界数值一律在宿主侧夹紧，不信任 settings.json 与请求体。
-- 公开仓库只包含源码、构建产物、验证脚本、用户文档与许可证；`handoff/`、`diagnosis/`、`references/`、`AGENTS.md`、`helper/preview/` 由 `.gitignore` 排除，不进入 git tree。发布前在临时副本里 `git init` + `git add -A` 核对 tracked 集合与泄漏。
+- 公开仓库包含源码、构建产物、验证脚本、用户文档、设计文档（`references/`）与 `AGENTS.md`；`handoff/`、`diagnosis/`、`helper/preview/` 由 `.gitignore` 排除，不进入 git tree。发布前在临时副本里 `git init` + `git add -A` 核对 tracked 集合与泄漏。
 
 ## 6. 当前状态
 

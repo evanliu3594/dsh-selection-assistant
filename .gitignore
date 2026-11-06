@@ -1,6 +1,6 @@
-# Local-only material: session handoffs, design docs and diagnostic archives.
-# The public repository ships the plugin source, its verification scripts and
-# the user-facing docs only.
+# Local-only material: session handoffs and diagnostic archives.
+# Source, builds, verification scripts, design docs (references/) and AGENTS.md
+# are published.
 /handoff/
 /diagnosis/
 
