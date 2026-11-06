@@ -1,0 +1,11 @@
+{
+  "meta": {
+    "title": "划词助手",
+    "description": "在任意 Windows 软件中选中文字并长按 Ctrl，从浮动工具栏调用 DeepSeek 完成翻译、解释、总结、搜索等操作。"
+  },
+  "section": "划词助手",
+  "page": {
+    "title": "划词助手",
+    "subtitle": "在任意软件中选中文字并长按 Ctrl，工具栏会浮在所有窗口之上，点一下即可交给 DeepSeek 处理。"
+  }
+}

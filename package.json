@@ -1,0 +1,51 @@
+{
+  "name": "dsh-selection-assistant",
+  "version": "0.1.0",
+  "description": "Global selection assistant for DeepSeek Harness: select text in any Windows app, hold Ctrl, and run DeepSeek actions from a floating toolbar.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "selection-assistant",
+    "translate",
+    "windows",
+    "global-hook"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "helper",
+    "src",
+    "scripts",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "verify": "node scripts/verify-host.mjs",
+    "verify:client": "node scripts/verify-client-bundle.mjs",
+    "verify:helper": "node scripts/verify-helper-resolve.mjs",
+    "probe": "node scripts/probe.mjs",
+    "helper:test": "pwsh -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

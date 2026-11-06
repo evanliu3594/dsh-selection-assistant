@@ -1,0 +1,26 @@
+# Local-only material: session handoffs, design docs and diagnostic archives.
+# The public repository ships the plugin source, its verification scripts and
+# the user-facing docs only.
+/handoff/
+/diagnosis/
+
+# Build and test scratch
+/helper/.selftest/
+/.selftest/
+/lib/client.body.js
+node_modules/
+*.log
+/.probe-data/
+/.verify-data-*/
+/.verify-resolve-*/
+*.tmp
+.env
+
+# Selftest screenshots show the surrounding desktop; keep them local.
+/helper/preview/
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

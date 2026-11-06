@@ -1,0 +1,11 @@
+{
+  "meta": {
+    "title": "Selection assistant",
+    "description": "Select text in any Windows app, hold Ctrl, and run DeepSeek actions from a floating toolbar."
+  },
+  "section": "Selection assistant",
+  "page": {
+    "title": "Selection assistant",
+    "subtitle": "Select text in any app, hold Ctrl, and pick an action. The toolbar and result window float above every application."
+  }
+}
