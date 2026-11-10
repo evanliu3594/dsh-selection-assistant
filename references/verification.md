@@ -385,6 +385,70 @@ Windows 仍待实机验收：pin 叠窗的真实鼠标交互、多屏混合 DPI�
 
 ### 13.4 当前限制
 
-- 运行中的 DSH 仍加载 0.2.1 宿主；需要完整重启 DSH 才能加载 0.2.3 的语言设置页与迁移逻辑。助手 app 未重建，辅助功能授权保持有效。
+- 13.1-13.3 执行时 DSH 仍加载 0.2.1 宿主；2026-11-10 19:01 重启后已加载 0.2.3，状态路由返回 `version=0.2.3`、`language.target=zh`、`language.fallback=en`。
 - macOS app bundle 的 `CFBundleShortVersionString` 仍为 0.2.1；本次不重建，避免再次改变签名触发 TCC 重新授权。下次 Mac 构建时再对齐到 0.2.3。
-- 真实浏览器/TextEdit 中的手动划词与长按 Control 仍建议人工验收一次。
+- 真实拖选与长按 Control 已在 DeepSeek Harness 窗口实测：19:01 触发 134 字符并完成 translate SSE；19:07 触发 136 字符。
+
+## 14. 本地宿主卸载与重装验证（2026-11-10）
+
+执行环境：macOS 27.2 arm64、DSH 0.2.2-rc.1、当前 profile `~/.dsh/profiles/desktop`。操作通过 DSH 宿主插件管理器执行，没有重启 DSH。
+
+### 14.1 卸载
+
+返回：
+
+```json
+{
+  "stage": "remove",
+  "target": "dsh-selection-assistant",
+  "changed": true,
+  "application": "applied",
+  "warnings": [],
+  "packageResult": { "exitCode": 0 }
+}
+```
+
+卸载后：
+
+- profile 依赖 `dsh-selection-assistant` 为 `null`。
+- `dsh.profile.bundles` 不包含 `dsh-selection-assistant`，数量 17 → 16。
+- `/selection-assistant/state` 返回 HTTP 404。
+- `SelectionAssistant` 进程消失。
+- `~/.dsh/selection-assistant/settings.json` 原文件保留，修改时间仍为 11 月 7 日。
+- 设置页入口随客户端 bundle 卸载消失。
+
+### 14.2 重装
+
+通过同一插件管理器安装本地绝对路径 `/Users/liu/Desktop/gitdir/dsh-selection-assistant`。返回：
+
+```json
+{
+  "stage": "enable",
+  "target": "dsh-selection-assistant",
+  "enabled": true,
+  "changed": true,
+  "application": "applied",
+  "bundle": "dsh-selection-assistant",
+  "version": "0.2.3",
+  "warnings": [],
+  "packageResult": {
+    "exitCode": 0,
+    "output": "dependencies:\n+ dsh-selection-assistant link:/Users/liu/Desktop/gitdir/dsh-selection-assistant"
+  }
+}
+```
+
+重装后：
+
+- profile 依赖恢复为 `link:/Users/liu/Desktop/gitdir/dsh-selection-assistant`。
+- `node_modules/dsh-selection-assistant` 符号链接指向仓库。
+- `dsh.profile.bundles` 恢复包含 `dsh-selection-assistant`，数量 16 → 17。
+- `/selection-assistant/state` 返回 HTTP 200，`version=0.2.3`。
+- 助手启动 PID 59673，`helper.status=running`，`permissions.accessibility=granted`。
+- `language.target=zh`、`language.fallback=en`，用户设置保留。
+- `helper.log` 出现 `全局事件 tap 安装成功`。
+- 客户端图重新包含 `dsh-selection-assistant/client.js`。
+
+### 14.3 结论与配方
+
+插件管理器可以热卸载和热重装。全程不需要重启 DSH，不需要重建 macOS app，不需要重新授予辅助功能。安装/卸载步骤、回退路径和踩坑记录见 [install.md](install.md)。

@@ -132,7 +132,9 @@ macOS 0.2.3 兼容验证（2026-11-10，macOS 27.2 arm64、Swift 6.4.2、Node 26
 - 已授权机器上用 `--skip-build` 跑 macOS 验证：`verify-macos-helper` PASS（ready、accessibility true、selftest 全 true、sessionCount=2）；`verify-host-macos` PASS（status running、预览 SSE、SIGTERM 回收）。
 - 当前 macOS 设置 `简体中文/English` 在内存中迁移为 `zh/en`；首次保存后落盘为语言代码。
 - 合成真实取词测试：正式助手日志 `触发 [ctrl-longpress] app=SelectionTriggerTest chars=59`，事件 tap 与 ⌘C 取词均正常。
-- 运行中的 DSH 仍是 0.2.1 宿主，需要完整重启加载 0.2.3 语言设置页。本次未重建 app，TCC 授权保持有效；app bundle 的 `CFBundleShortVersionString` 仍是 0.2.1，下次 Mac 构建再对齐。
+- 2026-11-10 19:01 重启后宿主加载 0.2.3；19:01 与 19:07 在 DeepSeek Harness 窗口真实触发 134/136 字符，translate SSE 完成。
+- 2026-11-10 19:18 通过插件管理器完成热卸载/热重装（`application: applied`）；profile 依赖恢复 `link:`，状态路由 200，助手 running，权限 granted；用户设置与 TCC 授权保留；全程未重启 DSH、未重建 app。
+- 本次未重建 app，`CFBundleShortVersionString` 仍为 0.2.1，下次 Mac 构建再对齐。
 
 待人工验收：macOS 真实应用（浏览器/TextEdit）拖选与长按 Control、两端 pin 叠窗与几何恢复、深色主题、多屏/混合 DPI、真实 DeepSeek 端到端。
 
@@ -142,6 +144,7 @@ macOS 0.2.3 兼容验证（2026-11-10，macOS 27.2 arm64、Swift 6.4.2、Node 26
 
 - 接口契约：`references/contracts.md`
 - 结果窗几何规则：`references/result-window-geometry.md`
+- 本地安装、卸载与重装：`references/install.md`
 - Windows 助手：`helper/README.md`
 - macOS 助手：`helper/macos/README.md`
 - Cherry Studio 对照研究：`references/cherry-studio-selection-assistant.md`

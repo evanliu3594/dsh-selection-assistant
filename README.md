@@ -38,9 +38,9 @@ target: https://github.com/evanliu3594/dsh-selection-assistant
 dsh plugin --profile desktop add https://github.com/evanliu3594/dsh-selection-assistant
 ```
 
-本地开发时也可以先克隆仓库，再把克隆目录交给 `install_bundle` 或 `dsh plugin add`，用 `link:` 安装便于改代码。
+本地开发时也可以先克隆仓库，再把克隆目录交给 `install_bundle` 或 `dsh plugin add`，用 `link:` 安装便于改代码。本地卸载、重装与踩坑见 [references/install.md](references/install.md)。
 
-安装后重启 DeepSeek Harness（浏览器产物在启动时装配）。首次加载时插件会：
+插件管理器通常热应用安装和卸载，返回 `application: applied` 即生效。设置页没有「划词助手」入口时，完整重启 DeepSeek Harness；只刷新页面不够。首次加载时插件会：
 
 1. 在 `%USERPROFILE%\.dsh\selection-assistant\`（Windows）或 `~/.dsh/selection-assistant/`（macOS）创建设置与日志；
 2. 在 `127.0.0.1` 随机端口启动助手通信服务；
@@ -182,7 +182,7 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 
 macOS 需要辅助功能授权才能验证真实拖选取词；自动验证覆盖编译、窗口渲染、SSE、LaunchServices 启动与健康退出，真实取词与 ⌘C 需人工验收。
 
-接口契约见 [references/contracts.md](references/contracts.md)，结果窗几何规则见 [references/result-window-geometry.md](references/result-window-geometry.md)，验证记录见 [references/verification.md](references/verification.md)，Cherry Studio 对照研究见 [references/cherry-studio-selection-assistant.md](references/cherry-studio-selection-assistant.md)。
+本地卸载、重装和踩坑见 [references/install.md](references/install.md)。接口契约见 [references/contracts.md](references/contracts.md)，结果窗几何规则见 [references/result-window-geometry.md](references/result-window-geometry.md)，验证记录见 [references/verification.md](references/verification.md)，Cherry Studio 对照研究见 [references/cherry-studio-selection-assistant.md](references/cherry-studio-selection-assistant.md)。
 
 ## 许可
 
