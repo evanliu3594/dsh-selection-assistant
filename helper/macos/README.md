@@ -111,6 +111,13 @@ node scripts/verify-macos-helper.mjs   # 构建 + 自测 + mock 宿主 SSE + Lau
 node scripts/verify-host-macos.mjs     # 真实 HelperManager 启动 app + 预览 SSE + SIGTERM 回收
 ```
 
+已授予辅助功能权限的机器上，给两条命令加 `--skip-build`，验证不会重建 app、不会改变 ad-hoc 签名，TCC 授权保持有效：
+
+```bash
+node scripts/verify-macos-helper.mjs --skip-build
+node scripts/verify-host-macos.mjs --skip-build
+```
+
 ## 已知限制
 
 - 辅助功能授权无法由脚本代授予；授权后的真实拖选、长按 Control、⌘C 取词需人工验收。System Settings 列表里可能显示为“划词助手”。

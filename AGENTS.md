@@ -64,6 +64,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File helper/selftest.ps1   # 
 sh scripts/build-macos-helper.sh        # swiftc 编译 app（首次启动时宿主也会自动调用）
 node scripts/verify-macos-helper.mjs    # 编译 + 自测截图 + mock 宿主 SSE + LaunchServices + 健康退出
 node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预览 SSE + 停止回收
+# 已授权机器给两条 verify 命令加 --skip-build，避免重建 app 改变签名而丢失 TCC 授权
 ```
 
 - 本机 shell 沙箱会拦 Node 的 piped-stdio 子进程，所以构建走 esbuild CLI + `spawnSync(stdio:'inherit')`；不要改用 esbuild JS API。
@@ -88,7 +89,7 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 
 ## 6. 当前状态
 
-0.2.3 在 0.2.2 基础上新增翻译语言设置与本地预判（Windows 实机已验证，本地提交尚未推送）。0.2.2 新增 Windows PowerShell 5.1 兜底；0.2.1 已合并到 `main`（远端 `main` 与 `feat/macos-support` 指向同一提交），并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
+0.2.3 在 0.2.2 基础上新增翻译语言设置与本地预判（Windows 实机已验证，已推送 `main`）。0.2.2 新增 Windows PowerShell 5.1 兜底；0.2.1 已合并到 `main`（远端 `main` 与 `feat/macos-support` 指向同一提交），并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
 
 macOS 验证结果（2026-11-06，macOS 27.2 arm64、Swift 6.4.2）：
 
@@ -124,7 +125,16 @@ Windows 0.2.3（2026-11-06 Windows 实机验证）：
 - 实机安装 0.2.3：旧设置迁移为 `zh/en`；切到 `en/en` 后英文 action 返回 meta + error；恢复 `zh/en`。
 - 待人工验收：真实模型对 unknown 文本的兜底、设置页真实渲染与下拉交互、结果窗显示该错误。
 
-待人工验收：macOS 辅助功能授权后的真实拖选/长按 Control/⌘C、两端 pin 叠窗与几何恢复、深色主题、多屏/混合 DPI、真实 DeepSeek 端到端。
+macOS 0.2.3 兼容验证（2026-11-10，macOS 27.2 arm64、Swift 6.4.2、Node 26.13.0）：
+
+- 拉取 `main` 到 `90782ed`，`package.json` 版本 0.2.3；0.2.2/0.2.3 没有改 macOS 助手源码。
+- 通用门 PASS：`build`、`probe`、`verify-host`、`verify-client-bundle`、`verify-lang`（122 项）。
+- 已授权机器上用 `--skip-build` 跑 macOS 验证：`verify-macos-helper` PASS（ready、accessibility true、selftest 全 true、sessionCount=2）；`verify-host-macos` PASS（status running、预览 SSE、SIGTERM 回收）。
+- 当前 macOS 设置 `简体中文/English` 在内存中迁移为 `zh/en`；首次保存后落盘为语言代码。
+- 合成真实取词测试：正式助手日志 `触发 [ctrl-longpress] app=SelectionTriggerTest chars=59`，事件 tap 与 ⌘C 取词均正常。
+- 运行中的 DSH 仍是 0.2.1 宿主，需要完整重启加载 0.2.3 语言设置页。本次未重建 app，TCC 授权保持有效；app bundle 的 `CFBundleShortVersionString` 仍是 0.2.1，下次 Mac 构建再对齐。
+
+待人工验收：macOS 真实应用（浏览器/TextEdit）拖选与长按 Control、两端 pin 叠窗与几何恢复、深色主题、多屏/混合 DPI、真实 DeepSeek 端到端。
 
 注意：macOS 辅助功能授权无法由 agent 代授予。重新编译 app 会改变 ad-hoc 签名，授权可能需要重新勾选。宿主 `src/` 改动后，用 `plugin_manager` 移除并重新安装 bundle 可即时生效（本次实测 `application: applied`）；直接替换文件不会热重载，必要时完整重启 DSH。macOS 助手源码改动后宿主下次启动会重新编译 app；浏览器半体更新后重建 `lib/` 并刷新设置页。
 

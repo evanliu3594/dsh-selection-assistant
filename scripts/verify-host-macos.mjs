@@ -11,7 +11,7 @@
  * alive, reports error + permissions.accessibility=false, and preview still
  * runs. The script does not require a granted TCC row.
  *
- *   node scripts/verify-host-macos.mjs [--keep]
+ *   node scripts/verify-host-macos.mjs [--keep] [--skip-build]
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -64,14 +64,18 @@ if (process.platform !== 'darwin') {
   process.exit(0)
 }
 
-const build = spawnSync('sh', ['scripts/build-macos-helper.sh'], {
-  cwd: ROOT,
-  stdio: 'inherit',
-})
-check(build.status === 0, `helper build exited with ${String(build.status)}`)
-if (failures.length > 0) {
-  console.error(`FAIL: ${failures.join('; ')}`)
-  process.exit(1)
+if (process.argv.includes('--skip-build')) {
+  console.log('build: skipped (--skip-build)')
+} else {
+  const build = spawnSync('sh', ['scripts/build-macos-helper.sh'], {
+    cwd: ROOT,
+    stdio: 'inherit',
+  })
+  check(build.status === 0, `helper build exited with ${String(build.status)}`)
+  if (failures.length > 0) {
+    console.error(`FAIL: ${failures.join('; ')}`)
+    process.exit(1)
+  }
 }
 
 const mod = await import(pathToFileURL(join(ROOT, 'lib', 'index.js')).href)

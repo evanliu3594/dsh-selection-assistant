@@ -175,6 +175,7 @@ sh scripts/build-macos-helper.sh        # 编译 Swift 助手 app（宿主首次
 sh scripts/build-macos-helper.sh --universal  # arm64 + x86_64 通用包
 node scripts/verify-macos-helper.mjs    # 编译 + 窗口自测截图 + mock 宿主 SSE + LaunchServices + 健康退出
 node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预览 SSE + SIGTERM 回收
+# 已授权机器加 --skip-build，避免重建 app 改变 ad-hoc 签名导致 TCC 授权失效
 ```
 
 本机开发前需要 esbuild CLI：执行 `npm install --no-save esbuild`，或用 `ESBUILD_BINARY` 指向已有二进制。

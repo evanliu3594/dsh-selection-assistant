@@ -348,3 +348,43 @@ Windows 仍待实机验收：pin 叠窗的真实鼠标交互、多屏混合 DPI�
 2. 设置页真实渲染、两个下拉交互、最长标签在窄窗口的排版。
 3. helper 结果窗显示该错误帧的实际视觉效果。
 4. macOS 侧界面与行为（共用同一套 TS 逻辑）。
+
+## 13. 0.2.3 macOS 兼容验证（2026-11-10）
+
+验证环境：macOS 27.2 arm64、Swift 6.4.2、Node 26.13.0。拉取后的提交为 `90782ed`，`package.json` 版本 0.2.3。
+
+### 13.1 通用门禁
+
+| 项 | 结果 |
+|---|---|
+| `node scripts/build.mjs` | PASS |
+| `node scripts/probe.mjs` | PASS |
+| `node scripts/verify-host.mjs` | PASS |
+| `node scripts/verify-client-bundle.mjs` | PASS |
+| `node --experimental-strip-types scripts/verify-lang.mjs` | PASS，122 项 |
+
+### 13.2 macOS 助手与宿主
+
+已授予辅助功能权限的机器上使用 `--skip-build`，避免重建 app 改变 ad-hoc 签名。
+
+| 项 | 结果 |
+|---|---|
+| `node scripts/verify-macos-helper.mjs --skip-build --keep` | PASS；selftest 的 `ok/clicked/pinToggled/resizeOk/stackOk/done` 全 true，`sessionCount=2` |
+| 助手状态 | `ready`，`permissions.accessibility=true` |
+| `node scripts/verify-host-macos.mjs --skip-build` | PASS；真实 HelperManager 启动 app，status running，权限 granted，预览 SSE 正常 |
+| 设置迁移 | 当前 macOS `settings.json` 的 `简体中文/English` 在内存中迁移为 `zh/en`；首次保存后落盘为语言代码 |
+
+### 13.3 真实取词链路
+
+本地 AppKit 目标窗口 + 合成拖选和长按 Control，验证事件 tap、状态机与 ⌘C 取词：
+
+- 诊断助手日志：`触发 [ctrl-longpress] app=SelectionTriggerTest chars=59`。
+- 正式助手日志：`触发 [ctrl-longpress] app=SelectionTriggerTest chars=59`，对应测试时间 2026-11-10 18:50:23。
+- 目标窗口最终保留 59 字符选区；工具栏由触发路径创建。
+- 测试窗口本身没有标准菜单时 ⌘C 不生效；在文本视图实现 copy 后取词成功。真实应用（浏览器、TextEdit 等）自带标准编辑菜单，不依赖该测试窗口的特殊处理。
+
+### 13.4 当前限制
+
+- 运行中的 DSH 仍加载 0.2.1 宿主；需要完整重启 DSH 才能加载 0.2.3 的语言设置页与迁移逻辑。助手 app 未重建，辅助功能授权保持有效。
+- macOS app bundle 的 `CFBundleShortVersionString` 仍为 0.2.1；本次不重建，避免再次改变签名触发 TCC 重新授权。下次 Mac 构建时再对齐到 0.2.3。
+- 真实浏览器/TextEdit 中的手动划词与长按 Control 仍建议人工验收一次。
