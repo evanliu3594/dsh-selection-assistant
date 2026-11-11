@@ -386,7 +386,7 @@ Windows 仍待实机验收：pin 叠窗的真实鼠标交互、多屏混合 DPI�
 ### 13.4 当前限制
 
 - 13.1-13.3 执行时 DSH 仍加载 0.2.1 宿主；2026-11-10 19:01 重启后已加载 0.2.3，状态路由返回 `version=0.2.3`、`language.target=zh`、`language.fallback=en`。
-- macOS app bundle 的 `CFBundleShortVersionString` 仍为 0.2.1；本次不重建，避免再次改变签名触发 TCC 重新授权。下次 Mac 构建时再对齐到 0.2.3。
+- 2026-11-11 已将 macOS app bundle 的 `CFBundleShortVersionString` 对齐到 0.2.3，并构建 `x86_64 + arm64` universal 二进制；codesign 校验通过。重建改变 ad-hoc 签名，辅助功能授权需要重新添加。
 - 真实拖选与长按 Control 已在 DeepSeek Harness 窗口实测：19:01 触发 134 字符并完成 translate SSE；19:07 触发 136 字符。
 
 ## 14. 本地宿主卸载与重装验证（2026-11-10）

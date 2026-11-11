@@ -134,7 +134,7 @@ macOS 0.2.3 兼容验证（2026-11-10，macOS 27.2 arm64、Swift 6.4.2、Node 26
 - 合成真实取词测试：正式助手日志 `触发 [ctrl-longpress] app=SelectionTriggerTest chars=59`，事件 tap 与 ⌘C 取词均正常。
 - 2026-11-10 19:01 重启后宿主加载 0.2.3；19:01 与 19:07 在 DeepSeek Harness 窗口真实触发 134/136 字符，translate SSE 完成。
 - 2026-11-10 19:18 通过插件管理器完成热卸载/热重装（`application: applied`）；profile 依赖恢复 `link:`，状态路由 200，助手 running，权限 granted；用户设置与 TCC 授权保留；全程未重启 DSH、未重建 app。
-- 本次未重建 app，`CFBundleShortVersionString` 仍为 0.2.1，下次 Mac 构建再对齐。
+- 2026-11-11 已对齐 macOS app 版本：`CFBundleShortVersionString=0.2.3`，二进制为 `x86_64 + arm64` universal，codesign 校验通过。重建改变 ad-hoc 签名，辅助功能授权需要重新添加。
 
 待人工验收：macOS 真实应用（浏览器/TextEdit）拖选与长按 Control、两端 pin 叠窗与几何恢复、深色主题、多屏/混合 DPI、真实 DeepSeek 端到端。
 

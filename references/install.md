@@ -187,7 +187,7 @@ macOS 首次安装还需要在 系统设置 → 隐私与安全性 → 辅助功
 16. **安装前先卸载同名包**。插件管理器对已安装的同名 bundle 会返回 `already-installed`；先移除再安装。
 17. **profile 文件权限是 600**。手动编辑后保持权限；DSH 和 pnpm 都以当前用户运行。
 18. **Windows 同样走插件管理器**。助手优先 PowerShell 7，缺失时回退 Windows PowerShell 5.1；Windows 没有 macOS TCC，但数据目录在 `%USERPROFILE%\.dsh\selection-assistant\`。
-19. **macOS app 版本元数据暂为 0.2.1**。宿主 package 已是 0.2.3；本次为保留 TCC 没有重建 app。下次 Mac 构建时统一版本。
+19. **macOS app 版本元数据已对齐 0.2.3**，二进制为 `x86_64 + arm64` universal。重新构建会改变 ad-hoc 签名，辅助功能授权需要重新添加。
 
 ## 七、回滚
 
