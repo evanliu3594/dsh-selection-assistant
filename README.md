@@ -1,6 +1,10 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/evanliu3594/dsh-selection-assistant/main/icon.svg" width="96" height="96" alt="dsh-selection-assistant icon">
+</p>
+
 # dsh-selection-assistant
 
-在任意 Windows 或 macOS 软件里选中文字，长按触发键，弹出划词工具栏；点一下就交给 DSH 当前配置的 DeepSeek 模型翻译、解释、总结、搜索或复制。形态、动作与设置项参考 [Cherry Studio 的划词助手](https://github.com/CherryHQ/cherry-studio)。
+deepseek-harness 的划词工具插件：在任意软件里选中文字，默认长按 Ctrl/Control 唤起工具栏，点一下就交给 DSH 当前配置的 DeepSeek 模型翻译、解释、总结、搜索或复制。目前仅支持 Win/Mac。形态、动作与设置项参考 [Cherry Studio 的划词助手](https://github.com/CherryHQ/cherry-studio)。
 
 [![GitHub](https://img.shields.io/badge/GitHub-evanliu3594-181717?logo=github)](https://github.com/evanliu3594/dsh-selection-assistant) ![平台](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue) ![类型](https://img.shields.io/badge/type-DSH%20bundle-green)
 
@@ -19,12 +23,12 @@
 | 依赖 | Windows | macOS |
 |---|---|---|
 | 系统 | Windows 10/11 | macOS 13.1 及以上 |
-| 原生助手 | PowerShell 7 + WPF（未安装时回退 Windows PowerShell 5.1） | Swift + AppKit，打包为 `SelectionAssistant.app` |
-| 构建工具 | 无需额外工具 | Xcode Command Line Tools（`xcode-select --install`） |
+| 原生助手 | Windows PowerShell 5.1 / PowerShell 7+ | Swift + AppKit，打包为 `SelectionAssistant.app` |
+| 构建工具 | 无 | Xcode Command Line Tools（`xcode-select --install`） |
 | 系统权限 | 无 | 辅助功能（全局事件 tap + ⌘C） |
 | DSH | 0.2.x 桌面版，需要 `llm` 服务 | 同左 |
 
-不需要额外 API Key、不需要管理员权限、不需要联网安装依赖（模型调用走 DSH 自己的通道）。
+不需要额外 API Key、不需要管理员权限
 
 ## 安装
 
@@ -187,4 +191,4 @@ macOS 需要辅助功能授权才能验证真实拖选取词；自动验证覆�
 
 ## 许可
 
-MIT。
+MIT
