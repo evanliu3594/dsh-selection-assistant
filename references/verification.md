@@ -349,6 +349,37 @@ Windows 仍待实机验收：pin 叠窗的真实鼠标交互、多屏混合 DPI�
 3. helper 结果窗显示该错误帧的实际视觉效果。
 4. macOS 侧界面与行为（共用同一套 TS 逻辑）。
 
+## 13. 0.2.4 远程控制输入与取词兜底验证（2026-11-13）
+
+验证环境：Windows 11、ToDesk 远程控制、Zed 编辑器、PowerShell 7.7.0、DSH 桌面版。
+
+### 13.1 现象与根因
+
+- 钩子事件日志共 222 条，全部 `injected=True`，包括鼠标拖拽；旧逻辑忽略所有注入事件，长按 Ctrl 无法触发。
+- ToDesk 的键盘鼠标输入由远程控制驱动注入，Windows 标记为 injected。旧逻辑把所有注入事件都当成助手自己的 Ctrl+C，直接丢弃。
+
+### 13.2 修复
+
+- 助手自己的 `SendInput` 带 `dwExtraInfo` 标记 `SELa`；钩子只忽略带此标记的事件。
+- 外部注入的键盘鼠标事件按用户输入处理。
+- 取词兜底：`SendInput Ctrl+C` 读不到文字时，依次尝试 `WM_COPY` 和 `PostMessage Ctrl+C`。
+- 自测真实钩子断言改为按注入事件校验。
+
+### 13.3 实测
+
+- ToDesk 远程 + Zed：鼠标拖选 23 个字符，长按 Ctrl；日志先出现 `取词: 尝试 WM_COPY`，再出现 `取词: 尝试 PostMessage Ctrl+C`，随后：
+  ```
+  触发 [ctrl-longpress] app=zed.exe chars=23
+  ```
+- 结果窗正常弹出，取词成功。
+- PowerShell 7.7.0 与 Windows PowerShell 5.1.19041.6456 下 `Add-Type` 编译 PASS；三个 `.ps1` 解析 0 错误。
+
+### 13.4 未验证 / 人工验收
+
+1. 其他远程控制工具（AnyDesk、RDP、向日葵等）。
+2. Zed 以外的应用；Electron、Word、微信等不响应 `PostMessage` 的应用可能仍需 UIAutomation 兜底。
+3. 剪贴板被其他软件持续占用或同步的场景。
+
 ## 13. 0.2.3 macOS 兼容验证（2026-11-10）
 
 验证环境：macOS 27.2 arm64、Swift 6.4.2、Node 26.13.0。拉取后的提交为 `90782ed`，`package.json` 版本 0.2.3。

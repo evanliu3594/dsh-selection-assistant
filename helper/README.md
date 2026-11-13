@@ -31,6 +31,7 @@ pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <helper>\Selection
 - Windows PowerShell 5.1 没有 `Environment.TickCount64`。C# 用 `Clock.NowMs`（`Stopwatch`）；PowerShell 用 `Get-NowMs`（入口脚本与自测脚本各一份）。
 - 5.1 的 `Add-Type` 需要显式引用 `System.Net.Http`，并在 PS 层关闭 `Expect: 100-continue`、把连接数设为 10；宿主解析与兜底逻辑在 `src/helper.ts`。
 - 三个 `.ps1` 保存为 UTF-8 with BOM，Windows PowerShell 5.1 才能正确读取中文；PowerShell 7 读取结果不变。
+- 远程控制/合成输入：钩子只忽略助手自己通过 `SendInput` 产生的事件（`dwExtraInfo` 标记）；ToDesk、远程桌面注入的键鼠按用户输入处理。取词读不到文字时依次尝试 `WM_COPY` 和 `PostMessage Ctrl+C`。
 
 ## 触发与取词
 

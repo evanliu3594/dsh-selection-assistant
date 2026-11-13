@@ -151,7 +151,7 @@ interface ActionSettings {
     },
     "defaults": { "provider": "deepseek-account", "model": "deepseek-flash", "reasoningEffort": "" },
     "paths": { "dataDir": "C:\\Users\\Evan\\.dsh\\selection-assistant", "log": "C:\\...\\helper.log" },
-    "version": "0.2.3"
+    "version": "0.2.4"
   }
 }
 ```

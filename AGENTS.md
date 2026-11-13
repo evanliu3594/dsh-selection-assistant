@@ -81,6 +81,7 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 - 不修改 DSH 本体的 profile `package.json` / `cordis.patch.yml`，安装走 `plugin_manager install_bundle` 或 `dsh plugin add`。
 - helper 进程只由宿主拉起与回收；stdin 关闭 = 宿主退出，helper 必须退出。
 - Windows 助手双运行时：`SelectionHook.cs` 保持 C# 5（Windows PowerShell 5.1 的 Add-Type 上限）；三个 `.ps1` 保存为 UTF-8 with BOM；时钟用 `Clock.NowMs`/`Get-NowMs`，不使用 `Environment.TickCount64`。
+- Windows 钩子只忽略助手自身的 `SendInput`（`dwExtraInfo` 标记）；ToDesk、远程桌面等外部注入输入按用户输入处理；取词兜底顺序为 `SendInput Ctrl+C` → `WM_COPY` → `PostMessage Ctrl+C`。
 - macOS 助手打包为 `helper/macos/bin/SelectionAssistant.app`，宿主用 LaunchServices（`open`）启动；直接 spawn 内层二进制的授权会算到 DSH 头上，不要改成 spawn。源码改动会让宿主在下次启动时重新编译；产物不提交。重新编译会改变 ad-hoc 签名，辅助功能授权可能需要重新添加。
 - macOS 没有 stdin 管道：助手每 2 秒请求宿主 `/v1/health`，连续 3 次失败即退出；宿主按 `helper-state.json` 的 pid 发 SIGTERM 停止。Windows 仍用 stdin EOF。
 - 文档语言直白、先结论后证据；不出现「不是……而是……」句式。
@@ -89,7 +90,7 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 
 ## 6. 当前状态
 
-0.2.3 在 0.2.2 基础上新增翻译语言设置与本地预判（Windows 实机已验证，已推送 `main`）。0.2.2 新增 Windows PowerShell 5.1 兜底；0.2.1 已合并到 `main`（远端 `main` 与 `feat/macos-support` 指向同一提交），并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
+0.2.4 在 0.2.3 基础上修复远程控制/合成输入下的触发与取词（Windows 实机已验证，本地提交尚未推送）。0.2.3 新增翻译语言设置与本地预判；0.2.2 新增 Windows PowerShell 5.1 兜底；0.2.1 已合并到 `main`，并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
 
 macOS 验证结果（2026-11-06，macOS 27.2 arm64、Swift 6.4.2）：
 
@@ -124,6 +125,14 @@ Windows 0.2.3（2026-11-06 Windows 实机验证）：
 - `verify-lang` 122 项、全部 node 门、`helper/selftest.ps1` PASS；独立验证 248 项，重叠路径 prepareCall=0。
 - 实机安装 0.2.3：旧设置迁移为 `zh/en`；切到 `en/en` 后英文 action 返回 meta + error；恢复 `zh/en`。
 - 待人工验收：真实模型对 unknown 文本的兜底、设置页真实渲染与下拉交互、结果窗显示该错误。
+
+Windows 0.2.4（2026-11-13 Windows 实机验证）：
+
+- 触发：钩子只忽略助手自身 `SendInput`（`dwExtraInfo` 标记 `SELa`）；ToDesk 注入的键鼠事件按用户输入处理。
+- 取词：常规 `SendInput Ctrl+C` 读不到文字时，依次尝试 `WM_COPY` 和 `PostMessage Ctrl+C`。
+- ToDesk 远程 + Zed：拖选 23 个字符后长按 Ctrl 成功触发；日志显示 `WM_COPY` 后 `PostMessage Ctrl+C` 取词成功。
+- PS7.7.0 与 PS5.1.19041.6456 下 `Add-Type` 编译 PASS；三个 `.ps1` 解析 0 错误。
+- 待人工验收：其他远程控制工具、Zed 以外应用、剪贴板被占用场景。
 
 macOS 0.2.3 兼容验证（2026-11-10，macOS 27.2 arm64、Swift 6.4.2、Node 26.13.0）：
 
