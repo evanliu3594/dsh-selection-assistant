@@ -188,6 +188,8 @@ macOS 首次安装还需要在 系统设置 → 隐私与安全性 → 辅助功
 17. **profile 文件权限是 600**。手动编辑后保持权限；DSH 和 pnpm 都以当前用户运行。
 18. **Windows 同样走插件管理器**。助手优先 PowerShell 7，缺失时回退 Windows PowerShell 5.1；Windows 没有 macOS TCC，但数据目录在 `%USERPROFILE%\.dsh\selection-assistant\`。
 19. **macOS app 版本元数据已对齐 0.2.3**，二进制为 `x86_64 + arm64` universal。重新构建会改变 ad-hoc 签名，辅助功能授权需要重新添加。
+20. **从 `link:` 切 npm 包前先清 junction**。旧的本地安装会在 `node_modules/dsh-selection-assistant` 留 junction；插件管理器直接装 npm 包时，pnpm 用 rename 覆盖这个 junction 会报 `ERR_PNPM_EPERM`，profile 被部分更新后 DSH 可能卡死。先卸载插件、完整重启 DSH，确认 junction 不存在，再安装 npm 包。
+21. **npm 包用白名单控制内容**。`package.json` 的 `files` 只列运行时需要的 helper 文件，`.npmignore` 兜底排除 `helper/preview/`、`helper/.selftest/`、`helper/macos/bin/` 等本地产物；发布前用 `npm pack --dry-run` 检查 tarball 清单。
 
 ## 七、回滚
 

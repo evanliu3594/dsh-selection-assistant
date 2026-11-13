@@ -1,0 +1,13 @@
+# Local-only and generated artifacts that must never enter the npm tarball.
+# package.json "files" is the primary whitelist; this file is a second guard
+# for paths that may be added to that whitelist later.
+helper/preview/
+helper/.selftest/
+helper/macos/bin/
+diagnosis/
+handoff/
+references/
+AGENTS.md
+*.log
+*.tmp
+.env
