@@ -405,6 +405,20 @@ function Get-SelectedText {
             if (-not [string]::IsNullOrEmpty($text)) { break }
             if ($i -lt 3) { Start-Sleep -Milliseconds 50 }
         }
+        if ([string]::IsNullOrEmpty($text)) {
+            Write-Log 'debug' '取词: 尝试 WM_COPY'
+            try { [void][SelectionHook]::SendCopyMessage() } catch { }
+            Start-Sleep -Milliseconds 80
+            $text = [ClipboardUtil]::ReadText()
+            if ($null -eq $text) { $text = '' }
+        }
+        if ([string]::IsNullOrEmpty($text)) {
+            Write-Log 'debug' '取词: 尝试 PostMessage Ctrl+C'
+            try { [void][SelectionHook]::PostCtrlC() } catch { }
+            Start-Sleep -Milliseconds 120
+            $text = [ClipboardUtil]::ReadText()
+            if ($null -eq $text) { $text = '' }
+        }
         return [string]$text
     } catch {
         Write-Log 'warn' ('取词异常: ' + $_.Exception.Message)
@@ -419,7 +433,7 @@ function Get-SelectedText {
 function On-HookEvent {
     param($e)
     if ($null -eq $e) { return }
-    if ($e.Injected) { return }
+    if ($e.OwnInjected) { return }
     try {
         if ($e.Kind -eq 'mouse') {
             if ($e.Phase -eq 'down') {
@@ -1117,7 +1131,7 @@ function Invoke-SelfTestTick {
 # Command prompts / status line helpers
 # ---------------------------------------------------------------------------
 
-function Get-Version { return '0.2.3' }
+function Get-Version { return '0.2.4' }
 
 # ---------------------------------------------------------------------------
 # Main pump

@@ -1,6 +1,6 @@
 {
   "name": "dsh-selection-assistant",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Global selection assistant for DeepSeek Harness: select text in any Windows or macOS app, hold Ctrl (Control on macOS), and run DeepSeek actions from a floating toolbar.",
   "keywords": [
     "deepseek-harness",

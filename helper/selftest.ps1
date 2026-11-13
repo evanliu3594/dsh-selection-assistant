@@ -142,8 +142,8 @@ function Invoke-HookTest {
         [SelectionHook]::SendKey(0xA2, $false)
         Start-Sleep -Milliseconds 250
         $events = @([SelectionHook]::DrainEvents())
-        $down = $events | Where-Object { $_.Kind -eq 'key' -and $_.Vk -eq 0xA2 -and $_.Phase -eq 'down' -and -not $_.Injected } | Select-Object -First 1
-        $up = $events | Where-Object { $_.Kind -eq 'key' -and $_.Vk -eq 0xA2 -and $_.Phase -eq 'up' -and -not $_.Injected } | Select-Object -First 1
+        $down = $events | Where-Object { $_.Kind -eq 'key' -and $_.Vk -eq 0xA2 -and $_.Phase -eq 'down' -and $_.Injected } | Select-Object -First 1
+        $up = $events | Where-Object { $_.Kind -eq 'key' -and $_.Vk -eq 0xA2 -and $_.Phase -eq 'up' -and $_.Injected } | Select-Object -First 1
         if ($down -and $up) {
             $duration = $up.Ms - $down.Ms
             $longPressMs = 500

@@ -59,6 +59,8 @@ public sealed class HookEvent {
     public bool Win;
     /// <summary>True for events produced by SendInput instead of the physical keyboard/mouse.</summary>
     public bool Injected;
+    /// <summary>True when the event came from this helper's own SendInput; such events must not trigger the assistant.</summary>
+    public bool OwnInjected;
     /// <summary>Clock.NowMs at the moment the hook saw the event.</summary>
     public long Ms;
 }
@@ -102,6 +104,11 @@ internal static class Native {
     internal const int WM_MBUTTONUP = 0x0208;
     internal const int LLKHF_INJECTED = 0x10;
     internal const int LLMHF_INJECTED = 0x01;
+
+    internal const uint WM_COPY = 0x0301;
+
+    /// <summary>dwExtraInfo value that marks SendInput events produced by this helper.</summary>
+    internal static readonly IntPtr OwnInjectedMarker = new IntPtr(0x53454C41);
 
     internal const int VK_LCONTROL = 0xA2;
     internal const int VK_RCONTROL = 0xA3;
@@ -235,6 +242,9 @@ internal static class Native {
 
     [DllImport("user32.dll")]
     internal static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     internal static extern int GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
@@ -436,13 +446,14 @@ public static class SelectionHook {
                 Native.MSLLHOOKSTRUCT data = (Native.MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Native.MSLLHOOKSTRUCT));
                 int msg = (int)wParam;
                 bool injected = (data.flags & Native.LLMHF_INJECTED) != 0;
+                bool ownInjected = injected && data.dwExtraInfo == Native.OwnInjectedMarker;
                 switch (msg) {
                     case Native.WM_LBUTTONDOWN:
                         _leftDown = true;
                         _downX = data.pt.x;
                         _downY = data.pt.y;
                         _dragged = false;
-                        Enqueue(MouseEvent("down", "L", data.pt.x, data.pt.y, false, injected));
+                        Enqueue(MouseEvent("down", "L", data.pt.x, data.pt.y, false, injected, ownInjected));
                         break;
                     case Native.WM_LBUTTONUP:
                         if (_leftDown) {
@@ -450,7 +461,7 @@ public static class SelectionHook {
                             int dy = data.pt.y - _downY;
                             if (dx * dx + dy * dy > 16) _dragged = true;
                         }
-                        Enqueue(MouseEvent("up", "L", data.pt.x, data.pt.y, _dragged, injected));
+                        Enqueue(MouseEvent("up", "L", data.pt.x, data.pt.y, _dragged, injected, ownInjected));
                         _leftDown = false;
                         _dragged = false;
                         break;
@@ -462,16 +473,16 @@ public static class SelectionHook {
                         }
                         break;
                     case Native.WM_RBUTTONDOWN:
-                        Enqueue(MouseEvent("down", "R", data.pt.x, data.pt.y, false, injected));
+                        Enqueue(MouseEvent("down", "R", data.pt.x, data.pt.y, false, injected, ownInjected));
                         break;
                     case Native.WM_RBUTTONUP:
-                        Enqueue(MouseEvent("up", "R", data.pt.x, data.pt.y, false, injected));
+                        Enqueue(MouseEvent("up", "R", data.pt.x, data.pt.y, false, injected, ownInjected));
                         break;
                     case Native.WM_MBUTTONDOWN:
-                        Enqueue(MouseEvent("down", "M", data.pt.x, data.pt.y, false, injected));
+                        Enqueue(MouseEvent("down", "M", data.pt.x, data.pt.y, false, injected, ownInjected));
                         break;
                     case Native.WM_MBUTTONUP:
-                        Enqueue(MouseEvent("up", "M", data.pt.x, data.pt.y, false, injected));
+                        Enqueue(MouseEvent("up", "M", data.pt.x, data.pt.y, false, injected, ownInjected));
                         break;
                 }
             } catch { }
@@ -486,13 +497,15 @@ public static class SelectionHook {
                 int msg = (int)wParam;
                 bool up = msg == Native.WM_KEYUP || msg == Native.WM_SYSKEYUP;
                 bool injected = (data.flags & Native.LLKHF_INJECTED) != 0;
+                bool ownInjected = injected && data.dwExtraInfo == Native.OwnInjectedMarker;
                 int vk = (int)data.vkCode;
-                ApplyKeyState(vk, up, injected);
+                ApplyKeyState(vk, up, ownInjected);
                 HookEvent e = new HookEvent();
                 e.Kind = "key";
                 e.Phase = up ? "up" : "down";
                 e.Vk = vk;
                 e.Injected = injected;
+                e.OwnInjected = ownInjected;
                 e.Ms = Clock.NowMs;
                 FillModifiers(e);
                 Queue.Enqueue(e);
@@ -501,9 +514,10 @@ public static class SelectionHook {
         return Native.CallNextHookEx(_keyHook, nCode, wParam, lParam);
     }
 
-    private static void ApplyKeyState(int vk, bool up, bool injected) {
-        // Physical state tracks only real input; injected events are ours.
-        if (injected) return;
+    private static void ApplyKeyState(int vk, bool up, bool ownInjected) {
+        // Physical state tracks real and externally injected input; only our own
+        // Ctrl+C helper events must not affect it.
+        if (ownInjected) return;
         switch (vk) {
             case Native.VK_LCONTROL: _lCtrl = !up; break;
             case Native.VK_RCONTROL: _rCtrl = !up; break;
@@ -523,7 +537,7 @@ public static class SelectionHook {
         e.Win = _lWin || _rWin;
     }
 
-    private static HookEvent MouseEvent(string phase, string button, int x, int y, bool drag, bool injected) {
+    private static HookEvent MouseEvent(string phase, string button, int x, int y, bool drag, bool injected, bool ownInjected) {
         HookEvent e = new HookEvent();
         e.Kind = "mouse";
         e.Phase = phase;
@@ -534,6 +548,7 @@ public static class SelectionHook {
         e.DownX = _downX;
         e.DownY = _downY;
         e.Injected = injected;
+        e.OwnInjected = ownInjected;
         e.Ms = Clock.NowMs;
         FillModifiers(e);
         return e;
@@ -557,6 +572,7 @@ public static class SelectionHook {
         e.Phase = down ? "down" : "up";
         e.Vk = vk;
         e.Injected = false;
+        e.OwnInjected = false;
         e.Ms = Clock.NowMs;
         FillModifiers(e);
         Queue.Enqueue(e);
@@ -564,7 +580,7 @@ public static class SelectionHook {
 
     /// <summary>Only used by the self test: pushes a mouse event into the queue.</summary>
     public static void TestInjectMouse(string phase, string button, int x, int y, bool drag) {
-        HookEvent e = MouseEvent(phase, button, x, y, drag, false);
+        HookEvent e = MouseEvent(phase, button, x, y, drag, false, false);
         Queue.Enqueue(e);
     }
 
@@ -580,7 +596,8 @@ public static class SelectionHook {
         inputs[0].U.ki.wScan = (ushort)Native.MapVirtualKey((uint)vk, 0);
         inputs[0].U.ki.dwFlags = down ? 0u : Native.KEYEVENTF_KEYUP;
         inputs[0].U.ki.time = 0;
-        inputs[0].U.ki.dwExtraInfo = IntPtr.Zero;
+        // Mark helper-generated input so the hook can ignore its own Ctrl+C.
+        inputs[0].U.ki.dwExtraInfo = Native.OwnInjectedMarker;
         Native.SendInput(1, inputs, Marshal.SizeOf(typeof(Native.INPUT)));
     }
 
@@ -607,6 +624,42 @@ public static class SelectionHook {
         SendKey(vk, true);
         Thread.Sleep(10);
         SendKey(vk, false);
+    }
+
+    /// <summary>
+    /// Fallback for apps that ignore global SendInput (remote-control sessions):
+    /// ask the foreground window to copy its selection through WM_COPY.
+    /// </summary>
+    public static bool SendCopyMessage() {
+        IntPtr hwnd = Native.GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return false;
+        return Native.PostMessage(hwnd, Native.WM_COPY, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    /// <summary>
+    /// Fallback for apps that ignore global SendInput: post a Ctrl+C key pair
+    /// directly to the foreground window. Winit/Electron style apps still read
+    /// the posted keyboard messages even when the low-level hook path is blocked.
+    /// </summary>
+    public static bool PostCtrlC() {
+        IntPtr hwnd = Native.GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return false;
+        bool ok = true;
+        ok &= Native.PostMessage(hwnd, (uint)Native.WM_KEYDOWN, new IntPtr(Native.VK_LCONTROL), KeyLParam(Native.VK_LCONTROL, false));
+        Thread.Sleep(8);
+        ok &= Native.PostMessage(hwnd, (uint)Native.WM_KEYDOWN, new IntPtr(0x43), KeyLParam(0x43, false));
+        Thread.Sleep(8);
+        ok &= Native.PostMessage(hwnd, (uint)Native.WM_KEYUP, new IntPtr(0x43), KeyLParam(0x43, true));
+        Thread.Sleep(8);
+        ok &= Native.PostMessage(hwnd, (uint)Native.WM_KEYUP, new IntPtr(Native.VK_LCONTROL), KeyLParam(Native.VK_LCONTROL, true));
+        return ok;
+    }
+
+    private static IntPtr KeyLParam(int vk, bool up) {
+        uint scan = Native.MapVirtualKey((uint)vk, 0);
+        long value = 1 | ((long)scan << 16);
+        if (up) value |= 0xC0000000L;
+        return new IntPtr(unchecked((int)value));
     }
 }
 
