@@ -63,7 +63,9 @@ macOS 27 的 `open --args` 不传参数，因此配置路径走 UserDefaults。h
 - helper 每 2 秒 `GET /v1/health`（不带 token）；连续 3 次失败后退出 0。宿主退出或崩溃后约 6 秒清理。
 - 同一 dataDir 只允许一个实例；新实例读到存活 pid 后直接退出 0。
 - 辅助功能未授权时：用 `AXIsProcessTrustedWithOptions` 提示一次，上报 `error + permissions.accessibility=false`，进程保持运行；每 1.5 秒复查，授权后安装 CGEventTap 并上报 `ready + true`。
-- 事件 tap 使用 `CGEventTap`（listenOnly），运行在独立线程；取词发送 ⌘C，若 Control 物理按下会先释放再恢复。
+- 事件 tap 使用 `CGEventTap`（listenOnly），运行在独立线程；只忽略助手自己合成的、带 magic user-data 的事件，外部注入的键鼠事件按用户输入处理。
+- 远程工具只发 Control `keyDown/keyUp` 而不发 `flagsChanged` 时，助手将前者归一化为状态事件；鼠标事件带 Control 标志时也能启动长按。
+- 取词发送 ⌘C，若 Control 物理按下会先释放再恢复；剪贴板取不到文字时回退读取前台元素的 `kAXSelectedTextAttribute`。
 
 ## 结果窗几何与多窗口
 
@@ -124,5 +126,5 @@ node scripts/verify-host-macos.mjs --skip-build
 - 重新编译会改变 ad-hoc 签名，System Settings 里的授权可能需要重新添加。
 - 自动化验证的 config/data 目录放在系统临时目录。LaunchServices 启动的 app 读取仓库/桌面下的配置会触发 macOS「桌面文件夹」TCC，自动验证不要使用 Desktop 路径。
 - 深色主题、溢出菜单视觉、多屏混合 DPI 尚未逐项截图验收。
-- 取词依赖剪贴板；部分沙箱应用可能忽略模拟的 ⌘C。
+- 取词优先使用剪贴板；部分沙箱应用可能忽略模拟的 ⌘C，此时尝试辅助功能选区，若应用不暴露选区则仍取不到文字。
 - `advanced.helperPath` 指向自定义路径时，应填 `.app`；填内层二进制会绕过 LaunchServices，权限归属会算到 DSH。

@@ -111,6 +111,7 @@ final class SelectionMonitor {
             (1 << CGEventType.otherMouseDown.rawValue) |
             (1 << CGEventType.otherMouseUp.rawValue) |
             (1 << CGEventType.keyDown.rawValue) |
+            (1 << CGEventType.keyUp.rawValue) |
             (1 << CGEventType.flagsChanged.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
@@ -218,13 +219,33 @@ final class SelectionMonitor {
         case .keyDown:
             let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
             let repeatKey = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            // Remote-control software can inject a Control keyDown/keyUp pair
+            // without a flagsChanged event. Normalize it to the same state event
+            // the local keyboard produces.
+            if isControlKey(keyCode) {
+                var controlFlags = flags
+                controlFlags.insert(.maskControl)
+                append(HookEvent(kind: .flagsChanged, point: point, button: 0, keyCode: keyCode, flags: controlFlags, isRepeat: false, dragDistance: 0, timestamp: now))
+                return
+            }
             append(HookEvent(kind: .keyDown, point: point, button: 0, keyCode: keyCode, flags: flags, isRepeat: repeatKey, dragDistance: 0, timestamp: now))
+        case .keyUp:
+            let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+            if isControlKey(keyCode) {
+                var controlFlags = flags
+                controlFlags.remove(.maskControl)
+                append(HookEvent(kind: .flagsChanged, point: point, button: 0, keyCode: keyCode, flags: controlFlags, isRepeat: false, dragDistance: 0, timestamp: now))
+            }
         case .flagsChanged:
             let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
             append(HookEvent(kind: .flagsChanged, point: point, button: 0, keyCode: keyCode, flags: flags, isRepeat: false, dragDistance: 0, timestamp: now))
         default:
             break
         }
+    }
+
+    private func isControlKey(_ keyCode: CGKeyCode) -> Bool {
+        keyCode == 59 || keyCode == 62
     }
 
     private func append(_ event: HookEvent) {

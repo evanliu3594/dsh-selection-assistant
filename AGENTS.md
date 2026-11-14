@@ -90,7 +90,7 @@ node scripts/verify-host-macos.mjs      # 真实 HelperManager 启动 app + 预�
 
 ## 6. 当前状态
 
-0.2.4 在 0.2.3 基础上修复远程控制/合成输入下的触发与取词（Windows 实机已验证，本地提交尚未推送）。0.2.3 新增翻译语言设置与本地预判；0.2.2 新增 Windows PowerShell 5.1 兜底；0.2.1 已合并到 `main`，并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
+0.2.4 在 0.2.3 基础上修复远程控制/合成输入下的触发与取词。Windows 实机已验证，已推送 `main`（`ff306c0`）；macOS 端补上远程注入 Ctrl 与 AX 取词兜底，验证见下。0.2.3 新增翻译语言设置与本地预判；0.2.2 新增 Windows PowerShell 5.1 兜底；0.2.1 已合并到 `main`，并已安装进 desktop profile（Windows 实机，`application: applied`）。Windows 0.1.0 行为保留，0.2.1 新增结果窗几何固化与多窗口堆叠，两端均已实现。
 
 macOS 验证结果（2026-11-06，macOS 27.2 arm64、Swift 6.4.2）：
 
@@ -133,6 +133,15 @@ Windows 0.2.4（2026-11-13 Windows 实机验证）：
 - ToDesk 远程 + Zed：拖选 23 个字符后长按 Ctrl 成功触发；日志显示 `WM_COPY` 后 `PostMessage Ctrl+C` 取词成功。
 - PS7.7.0 与 PS5.1.19041.6456 下 `Add-Type` 编译 PASS；三个 `.ps1` 解析 0 错误。
 - 待人工验收：其他远程控制工具、Zed 以外应用、剪贴板被占用场景。
+
+macOS 0.2.4 远程注入验证（2026-11-14，macOS 27.2 arm64、Swift 6.4.2）：
+
+- 事件 tap 继续只忽略助手自身合成事件；ToDesk 等外部注入的键鼠事件按用户输入处理。
+- remote-control 只发 Ctrl `keyDown/keyUp`、不发 `flagsChanged` 时，归一化为状态事件后长按可触发。
+- 鼠标事件带 Control 标志、没有单独键盘状态时，鼠标松开也能启动长按。
+- `⌘C` 取不到文字时，追加读取前台元素的 `kAXSelectedTextAttribute`；合成测试取到 95 字符。
+- 构建：`sh scripts/build-macos-helper.sh --universal` PASS；app 版本 0.2.4，`x86_64 + arm64`，codesign PASS。
+- `verify-macos-helper --skip-build` PASS（selftest、预览 SSE、健康退出）；重建后辅助功能授权为 false，需人工重新添加。
 
 macOS 0.2.3 兼容验证（2026-11-10，macOS 27.2 arm64、Swift 6.4.2、Node 26.13.0）：
 

@@ -8,12 +8,16 @@
 
 - 钩子只忽略助手自己通过 `SendInput` 产生的事件（`dwExtraInfo` 标记 `SELa`）；ToDesk、远程桌面等工具注入的键盘和鼠标事件按用户输入处理。
 - 取词在常规 `SendInput Ctrl+C` 读不到文字时，追加 `WM_COPY` 和 `PostMessage Ctrl+C` 两条兜底路径。
+- macOS 事件 tap 将远程工具注入的 Ctrl `keyDown/keyUp` 归一化为 `flagsChanged` 状态；鼠标事件带 Control 标志时也能启动长按。
+- macOS `⌘C` 取不到文字时，回退读取前台元素的辅助功能选区（`kAXSelectedTextAttribute`）。
 - 修正自测中真实钩子注入事件被误判为「非注入」的断言。
 
 ### 验证
 
 - ToDesk 远程控制 + Zed：鼠标拖选 23 个字符后长按 Ctrl，成功弹出助手；日志显示 `WM_COPY` 后 `PostMessage Ctrl+C` 取词成功。
 - PowerShell 7.7.0 与 Windows PowerShell 5.1.19041.6456 下 `Add-Type` 编译 PASS；三个 `.ps1` 解析 0 错误。
+- macOS 合成远程输入：只发 Ctrl keyDown/keyUp 时触发成功（`chars=95`）；禁用测试窗口复制后，AX 选区兜底成功（`chars=95`）。
+- macOS 0.2.4 universal app 构建和 codesign PASS；重建后辅助功能授权需要重新添加。
 - 待人工验收：其他远程控制工具、Zed 以外的应用、剪贴板被占用场景。
 
 ## 0.2.3 (2026-11-06)

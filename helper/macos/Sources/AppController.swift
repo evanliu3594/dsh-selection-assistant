@@ -1,5 +1,6 @@
 import Cocoa
 import Foundation
+import ApplicationServices
 
 struct LaunchOptions {
     var configPath: String?
@@ -369,6 +370,16 @@ final class AppController {
             guard event.button == 0, event.dragDistance > 4 else { return }
             let point = ScreenGeometry.appKitPoint(fromCG: event.point)
             selectionCandidate = SelectionCandidate(point: point, at: event.timestamp)
+            // Some remote-control clients set Control only on the mouse event
+            // and omit the flagsChanged event. Treat that as the start of the
+            // long press while the fresh selection is still available.
+            if config.trigger.mode == .ctrl, event.flags.contains(.maskControl) {
+                if !ctrlDown {
+                    ctrlDown = true
+                    ctrlDownAt = event.timestamp
+                }
+                ctrlCancelled = false
+            }
             if config.trigger.mode == .selection {
                 pendingSelectionTriggerAt = event.timestamp + Double(config.trigger.captureDelayMs) / 1000.0 + 0.03
             }
@@ -491,8 +502,26 @@ final class AppController {
             if !text.isEmpty { break }
             if attempt < 3 { usleep(50_000) }
         }
+        if text.isEmpty {
+            text = selectedTextFromAccessibility()
+            if !text.isEmpty {
+                logger.info("取词: 辅助功能选区兜底")
+            }
+        }
         clipboard.restore(snapshot)
         return text
+    }
+
+    private func selectedTextFromAccessibility() -> String {
+        let system = AXUIElementCreateSystemWide()
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
+              let focusedValue else { return "" }
+        let element = unsafeBitCast(focusedValue, to: AXUIElement.self)
+        var selectedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedValue) == .success,
+              let selectedText = selectedValue as? String else { return "" }
+        return selectedText
     }
 
     private func appAllowed(_ app: AppInfo) -> Bool {

@@ -483,3 +483,32 @@ Windows 仍待实机验收：pin 叠窗的真实鼠标交互、多屏混合 DPI�
 ### 14.3 结论与配方
 
 插件管理器可以热卸载和热重装。全程不需要重启 DSH，不需要重建 macOS app，不需要重新授予辅助功能。安装/卸载步骤、回退路径和踩坑记录见 [install.md](install.md)。
+
+## 15. macOS 0.2.4 远程注入触发与 AX 取词验证（2026-11-14）
+
+执行环境：macOS 27.2 arm64、Swift 6.4.2、DSH 桌面版。源码从 `main` 的 0.2.4 提交继续修改。
+
+### 15.1 改动
+
+- `SelectionMonitor`：事件 mask 增加 `keyUp`；Control 的 `keyDown/keyUp` 归一化为 `flagsChanged` 状态事件；外部注入事件仍只按 magic user-data 排除助手自身合成事件。
+- `AppController`：鼠标松开时若事件带 Control 标志且没有独立键盘状态，启动长按计时；`⌘C` 读不到剪贴板时读取前台元素的 `kAXSelectedTextAttribute`。
+
+### 15.2 合成测试
+
+测试工具放在 `/tmp`，不进入仓库。目标窗口为 AppKit 文本视图，合成拖选后只发送 Control `keyDown/keyUp`，不发送 `flagsChanged`。
+
+- 普通复制：诊断助手日志 `触发 [ctrl-longpress] app=RemoteTestApp chars=95`。
+- 禁用目标窗口 copy 后：日志 `取词: 辅助功能选区兜底`，随后 `触发 [ctrl-longpress] app=RemoteTestApp chars=95`。
+- 两次测试都证明 keyDown/keyUp 触发路径和取词兜底生效。
+
+### 15.3 构建与自动验证
+
+- `sh scripts/build-macos-helper.sh --universal` PASS；app `CFBundleShortVersionString=0.2.4`，二进制 `x86_64 + arm64`，`codesign --verify --deep --strict` PASS。
+- `node scripts/verify-macos-helper.mjs --skip-build` PASS（selftest、LaunchServices、预览 SSE、健康退出）；重建后新 app 的辅助功能授权为 false，正常模式返回权限 error。
+- 通用门 `probe`、`verify-host`、`verify-client-bundle`、`verify-lang` PASS。
+
+### 15.4 待人工验收
+
+- 在真实 ToDesk/远程桌面会话中测试 macOS 目标应用；合成测试覆盖了事件形态，真实远程工具的注入时序仍需实机确认。
+- 重建 app 后需要在系统设置重新添加 SelectionAssistant 的辅助功能授权。
+- Intel slice 已构建；本机没有 Rosetta，未实际运行 x86_64 slice。
